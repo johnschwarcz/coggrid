@@ -78,9 +78,10 @@ pytest
 pushed the belief from optimal.
 
 The middle panel is the point. Binned by regret, the joint observer's accuracy is
-flat (`r = −0.03`) while the naive observer's collapses (`r = −0.36`). Regret is
-**not** a measure of how hard an episode is — a hard episode would hurt both. It
-is specifically a measure of how much *factorizing* costs on that episode.
+essentially flat (`|r| < 0.05`) while the naive observer's collapses
+(`r ≈ −0.37`). Regret is **not** a measure of how hard an episode is — a hard
+episode would hurt both. It is specifically a measure of how much *factorizing*
+costs on that episode. Exact per-run correlations are printed in the panel.
 
 ```python
 from coggrid import factorization_regret, disentanglement

@@ -32,8 +32,9 @@ if __name__ == "__main__":
     parser.add_argument("--episodes", type=int, default=15000)
     args, _ignored = parser.parse_known_args()
     args.out.mkdir(parents=True, exist_ok=True)
-
-    cfg = CogGridConfig(n_vars=500, n_contexts=2, n_realizations=10, seed=0)
+    
+    
+    cfg = CogGridConfig(n_vars=500, n_contexts=2, n_realizations=10, seed=4)
     batch = World(cfg).sample_episodes(args.episodes)
     traces = run_observers(batch)
 
@@ -46,7 +47,9 @@ if __name__ == "__main__":
         print("wrote", path, f"({path.stat().st_size / 1e3:.0f} kB)")
 
     # One short episode animates into a much smaller GIF than the default 30.
-    short = CogGridConfig(n_vars=500, n_contexts=2, n_realizations=10, n_steps=16, seed=0)
+    short = CogGridConfig(
+        n_vars=500, n_contexts=2, n_realizations=10, n_steps=16, seed=5
+    )
     small = World(short).sample_episodes(1)
     clip = animate_episode(small, run_observers(small), extended=True, fps=4)
     path = clip.save(args.out / "episode_animation")
