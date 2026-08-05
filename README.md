@@ -10,8 +10,7 @@ the environment and ideal-observer baselines from
 [arXiv:2603.27134](https://arxiv.org/abs/2603.27134), packaged to drop into your
 own training loop.
 
-> **The navigation is in abstract space.** The "grid" is the table of observation
-> rates over the joint realizations of the active latent variables.
+> **The navigation is in abstract space.**
 
 Latent variables interact *pairwise* to produce observation statistics, so the
 observation distribution does not factorize over them. An agent that represents
