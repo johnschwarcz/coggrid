@@ -185,6 +185,14 @@ class CogGridConfig:
 
         ``n_realizations ** n_contexts`` grows fast; this is the number people
         need in front of them *before* they wait on an OOM.
+
+        Examples
+        --------
+        >>> print(CogGridConfig(n_contexts=4, n_realizations=20).memory_report(1000))
+        1000 episodes x 5 channels x 20^4 realizations
+          joint likelihood : 6.0 GiB
+          joint belief     : 35.8 GiB
+          peak (approx)    : 41.7 GiB
         """
         n = self.n_episodes if n_episodes is None else n_episodes
         table = int(np.prod(self.joint_likelihood_shape(n), dtype=np.int64)) * 8

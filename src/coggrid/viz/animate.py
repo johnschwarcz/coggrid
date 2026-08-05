@@ -459,10 +459,11 @@ def regret_rate_panel(ax: Axes, view: EpisodeView) -> Callable[[int], Any]:
     divergence driving it.
 
     Note the asymmetry this exposes. Update divergence is a KL, so it is never
-    negative; the change in regret is negative on roughly 43% of steps, because
-    the naive posterior drifts back toward the optimal one as often as away.
-    The update predicts how far regret *moves*, not which way — which is why it
-    tracks the magnitude of the change far better than its signed value.
+    negative; the change in regret is negative on a large fraction of steps,
+    because the naive posterior drifts back toward the optimal one about as
+    often as away. The update predicts how far regret *moves*, not which way —
+    which is why it tracks the magnitude of the change far better than its
+    signed value.
     """
     goal = view.goal_context
     delta = np.diff(view.goal_regret, prepend=0.0)

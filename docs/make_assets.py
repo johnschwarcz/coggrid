@@ -47,10 +47,9 @@ if __name__ == "__main__":
         print("wrote", path, f"({path.stat().st_size / 1e3:.0f} kB)")
 
     # One short episode animates into a much smaller GIF than the default 30.
-    short = CogGridConfig(
-        n_vars=500, n_contexts=2, n_realizations=10, n_steps=16, seed=5
-    )
-    small = World(short).sample_episodes(1)
-    clip = animate_episode(small, run_observers(small), extended=True, fps=4)
+    anim = CogGridConfig(
+        n_vars=500, n_contexts=2, n_realizations=10, n_steps=30, seed=8)
+    W = World(anim).sample_episodes(1)
+    clip = animate_episode(W, run_observers(W), extended=False, fps=6)
     path = clip.save(args.out / "episode_animation")
     print("wrote", path, f"({path.stat().st_size / 1e3:.0f} kB)")

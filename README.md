@@ -40,13 +40,14 @@ world = World(CogGridConfig(n_vars=500, n_contexts=2, seed=0))
 batch = world.sample_episodes(2000)
 traces = run_observers(batch)
 
-traces["joint"].final()   # {'accuracy': 0.774, 'p_correct': 0.690, 'mse': 0.361}
-traces["naive"].final()   # {'accuracy': 0.451, 'p_correct': 0.398, 'mse': 5.312}
+traces["joint"].final()   # {'accuracy': ..., 'p_correct': ..., 'mse': ...}
+traces["naive"].final()   # the same three, for the factorized observer
 ```
 
-**0.774 against 0.451.** That gap is the cost of a factorized representation, and
-it is the only thing separating the two observers — they see identical evidence
-and differ solely in whether they model the interaction.
+The joint observer lands **far ahead** — on the default config it is close to
+twice as likely to identify the goal variable correctly. That gap is the cost of
+a factorized representation, and it is the only thing separating the two: they
+see identical evidence and differ solely in whether they model the interaction.
 
 ## Install
 
@@ -78,10 +79,10 @@ pytest
 pushed the belief from optimal.
 
 The middle panel is the point. Binned by regret, the joint observer's accuracy is
-essentially flat (`|r| < 0.05`) while the naive observer's collapses
-(`r ≈ −0.37`). Regret is **not** a measure of how hard an episode is — a hard
-episode would hurt both. It is specifically a measure of how much *factorizing*
-costs on that episode. Exact per-run correlations are printed in the panel.
+essentially flat while the naive observer's collapses. Regret is **not** a
+measure of how hard an episode is — a hard episode would hurt both. It is
+specifically a measure of how much *factorizing* costs on that episode. The
+correlation behind each curve is printed in the panel's legend.
 
 ```python
 from coggrid import factorization_regret, disentanglement
@@ -97,8 +98,9 @@ exactly when the marginal belief dynamics are Markovian, so it captures how much
 of a step's update was carried by what came before.
 
 The two are a **flow and a stock**, and neither bounds the other — KL is not
-additive across sequential Bayesian updates. On the default config regret
-*decreases* on 43% of steps, which a per-step divergence cannot.
+additive across sequential Bayesian updates. Regret *decreases* on a large
+fraction of steps, which a per-step divergence cannot: dis-entanglement predicts
+how far the belief moves, not which way.
 
 ---
 
