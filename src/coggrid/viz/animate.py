@@ -1,0 +1,727 @@
+"""Play a single episode back, the way ``env.render()`` shows you a gym task.
+
+The entry point is :func:`animate_episode`. In a notebook it plays on its own —
+make it the last expression in a cell and nothing else is needed::
+
+    animate_episode(batch, traces)
+
+Elsewhere, :meth:`EpisodeAnimation.save` writes a GIF and
+:attr:`EpisodeAnimation.anim` is the underlying ``FuncAnimation``.
+
+Unlike :mod:`coggrid.viz.plots`, whose functions return a ``Figure``, everything
+here is time-varying: a **panel** is a function that draws itself once and hands
+back an updater called with the timestep.
+
+.. code-block:: python
+
+    def my_panel(ax, view):
+        (line,) = ax.plot([], [])
+        p_correct = view.traces["joint"].p_correct[view.episode]
+        def update(t):
+            line.set_data(range(t + 1), p_correct[: t + 1])
+        return update
+
+    # panels are laid out in rows: grids on top, things that evolve below
+    animate_episode(batch, traces, panels=[GRID_PANELS, [*TRACE_PANELS, my_panel]])
+
+``view`` is an :class:`EpisodeView` carrying the batch, the traces, the episode
+index and the palette, plus the derived arrays panels tend to want.
+"""
+
+from __future__ import annotations
+
+import tempfile
+from collections.abc import Callable, Mapping, Sequence
+from dataclasses import dataclass
+from functools import cached_property
+from pathlib import Path
+from typing import Any
+
+import numpy as np
+from matplotlib.animation import FuncAnimation, PillowWriter
+from matplotlib.axes import Axes
+from matplotlib.colors import LinearSegmentedColormap, to_hex
+from matplotlib.figure import Figure
+from matplotlib.patches import Rectangle
+
+from ..observers import BeliefTrace, disentanglement, factorization_regret
+from ..world import EpisodeBatch
+from .plots import MAX_PAIRS, display_pairs
+from .style import PALETTE, Palette, label_axes
+
+__all__ = [
+    "EpisodeView",
+    "EpisodeAnimation",
+    "animate_episode",
+    "observations_panel",
+    "joint_posterior_panel",
+    "naive_posterior_panel",
+    "difference_panel",
+    "marginal_beliefs_panel",
+    "regret_panel",
+    "regret_rate_panel",
+    "default_panels",
+    "GRID_PANELS",
+    "TRACE_PANELS",
+    "DEFAULT_PANELS",
+]
+
+#: A panel draws its static furniture into ``ax`` and returns an updater that is
+#: called with the timestep for every frame.
+Panel = Callable[[Axes, "EpisodeView"], Callable[[int], Any]]
+
+#: Height of one row of panels, in inches. Grids are square-ish and want the
+#: room; time series are wide and short, so later rows get less.
+GRID_ROW_HEIGHT = 4.2
+TRACE_ROW_HEIGHT = 2.6
+PANEL_WIDTH = 4.2
+
+
+@dataclass(frozen=True)
+class EpisodeView:
+    """One episode, plus the derived arrays panels keep needing.
+
+    Everything is already sliced down to a single episode, so a panel never has
+    to remember which axis is the batch.
+    """
+
+    batch: EpisodeBatch
+    traces: Mapping[str, BeliefTrace]
+    episode: int = 0
+    palette: Palette = PALETTE
+    max_pairs: int = MAX_PAIRS
+
+    @property
+    def pairs(self) -> list[tuple[int, int]]:
+        """Variable pairs worth drawing, goal-involving first. Empty when C == 1."""
+        return display_pairs(self.cfg.n_contexts, self.goal_context, self.max_pairs)
+
+    @property
+    def primary_pair(self) -> tuple[int, int] | None:
+        """The pair the grid panels draw, or ``None`` with a single variable."""
+        return self.pairs[0] if self.pairs else None
+
+    @property
+    def cfg(self):
+        return self.batch.cfg
+
+    @property
+    def n_steps(self) -> int:
+        return self.batch.n_steps
+
+    @property
+    def truth(self) -> np.ndarray:
+        """``(n_contexts,)`` realization each active variable actually took."""
+        return self.batch.ctx_vals[self.episode]
+
+    @property
+    def goal_context(self) -> int:
+        """Which column of the active variables the agent is scored on."""
+        return int(self.batch.goal_ind[self.episode])
+
+    def variable_label(self, c: int) -> str:
+        """Axis label naming the variable and its role this episode."""
+        role = "goal" if c == self.goal_context else "context"
+        return f"var {c} (idx {self.batch.ctx_inds[self.episode, c]}) — {role}"
+
+    def variable_color(self, c: int) -> str:
+        """Green for the goal variable, a shade of orange for a context one.
+
+        With three or more variables a single orange would draw two or more
+        indistinguishable lines, so the context variables are spread across an
+        orange ramp — still obviously "not the goal", but telling apart.
+        """
+        if c == self.goal_context:
+            return self.palette.goal
+        others = [k for k in range(self.cfg.n_contexts) if k != self.goal_context]
+        if len(others) < 2:
+            return self.palette.other
+        ramp = LinearSegmentedColormap.from_list(
+            "cg_context", ["#a8501a", self.palette.other, "#f7cd93"]
+        )
+        return to_hex(ramp(others.index(c) / (len(others) - 1)))
+
+    @property
+    def observations(self) -> np.ndarray:
+        """``(n_steps, n_observations)`` boolean evidence stream."""
+        return self.batch.observations[self.episode]
+
+    @cached_property
+    def _joint_posterior(self) -> np.ndarray:
+        """``(n_steps, R, ..., R)`` normalized posterior over the whole grid."""
+        log_post = self.traces["joint"].log_posterior[self.episode]
+        axes = tuple(range(1, log_post.ndim))
+        grid = np.exp(log_post - log_post.max(axis=axes, keepdims=True))
+        return grid / grid.sum(axis=axes, keepdims=True)
+
+    def joint_pair_grid(self, i: int, j: int) -> np.ndarray:
+        """``(n_steps, R, R)`` joint posterior marginalized onto variables i, j.
+
+        With more than two active variables the full posterior is
+        ``R ** n_contexts`` wide and cannot be shown, so a pair is projected out
+        of it. With exactly two this is the posterior itself.
+        """
+        drop = tuple(1 + k for k in range(self.cfg.n_contexts) if k not in (i, j))
+        grid = self._joint_posterior.sum(axis=drop) if drop else self._joint_posterior
+        return grid if i < j else grid.transpose(0, 2, 1)
+
+    def naive_pair_grid(self, i: int, j: int) -> np.ndarray:
+        """``(n_steps, R, R)`` joint over i, j that the naive observer *implies*.
+
+        It holds one belief per variable, so the joint it stands behind is their
+        outer product — which is exactly the assumption under test.
+        """
+        belief = self.traces["naive"].belief[self.episode]
+        return belief[:, i, :, None] * belief[:, j, None, :]
+
+    def _pair(self) -> tuple[int, int]:
+        if self.primary_pair is None:
+            raise ValueError(
+                "grid panels need at least two active variables; with "
+                "n_contexts=1 use marginal_beliefs_panel instead"
+            )
+        return self.primary_pair
+
+    def marginal_belief(self, name: str) -> np.ndarray:
+        """``(n_steps, n_contexts, n_realizations)`` one observer's marginals."""
+        return self.traces[name].belief[self.episode]
+
+    @cached_property
+    def goal_regret(self) -> np.ndarray:
+        """``(n_steps,)`` factorization regret on the goal variable.
+
+        ``D_KL(B_joint || B_naive)`` over the goal variable (arXiv:2603.27134
+        §3.1). An accumulating measure, so it compares whole trajectories rather
+        than resolving individual steps — which is what :attr:`disentanglement`
+        is for.
+        """
+        return factorization_regret(
+            self.traces["joint"], self.traces["naive"]
+        )[self.episode]
+
+    @cached_property
+    def disentanglement(self) -> np.ndarray:
+        """``(n_steps, n_contexts)`` how non-Markovian each step's update is.
+
+        This episode's slice of :func:`~coggrid.observers.disentanglement`
+        (arXiv:2603.27134 §B.3).
+        """
+        return disentanglement(
+            self.traces["joint"], self.traces["naive"], self.batch, per_variable=True
+        )[self.episode]
+
+    @cached_property
+    def cumulative_disentanglement(self) -> np.ndarray:
+        """``(n_steps, n_contexts)`` running total of :attr:`disentanglement`."""
+        return np.cumsum(self.disentanglement, axis=0)
+
+    @cached_property
+    def joint_grid(self) -> np.ndarray:
+        """:meth:`joint_pair_grid` for :attr:`primary_pair`."""
+        return self.joint_pair_grid(*self._pair())
+
+    @cached_property
+    def naive_grid(self) -> np.ndarray:
+        """:meth:`naive_pair_grid` for :attr:`primary_pair`."""
+        return self.naive_pair_grid(*self._pair())
+
+    @cached_property
+    def difference_grid(self) -> np.ndarray:
+        """``joint_grid - naive_grid``: the mass factorizing puts in the wrong place."""
+        return self.joint_grid - self.naive_grid
+
+    @cached_property
+    def grid_vmax(self) -> float:
+        """Shared colour ceiling, so panels stay comparable and do not flicker."""
+        return float(max(self.joint_grid.max(), self.naive_grid.max()))
+
+    @cached_property
+    def difference_vmax(self) -> float:
+        """Symmetric limit for the difference panel, so zero stays neutral."""
+        return float(np.abs(self.difference_grid).max()) or 1e-12
+
+    @staticmethod
+    def modes(grid: np.ndarray) -> np.ndarray:
+        """``(n_steps, 2)`` argmax cell of each frame of a ``(T, R, R)`` grid."""
+        flat = grid.reshape(len(grid), -1).argmax(axis=1)
+        return np.stack(np.unravel_index(flat, grid.shape[1:]), axis=-1)
+
+
+# --------------------------------------------------------------------------- #
+# built-in panels
+# --------------------------------------------------------------------------- #
+def _mark_truth(ax: Axes, view: EpisodeView) -> None:
+    ax.add_patch(
+        Rectangle(
+            (view.truth[0] - 0.5, view.truth[1] - 0.5), 1, 1,
+            edgecolor=view.palette.goal, facecolor="none", linewidth=2.0,
+        )
+    )
+
+
+def _label_grid(ax: Axes, view: EpisodeView, title: str) -> None:
+    label_axes(
+        ax, xlabel=view.variable_label(0), ylabel=view.variable_label(1), title=title
+    )
+    ax.xaxis.label.set_color(view.variable_color(0))
+    ax.yaxis.label.set_color(view.variable_color(1))
+
+
+def _posterior_panel(which: str, title: str) -> Panel:
+    def panel(ax: Axes, view: EpisodeView) -> Callable[[int], Any]:
+        grid = getattr(view, which)
+        modes = view.modes(grid)
+        image = ax.imshow(
+            np.zeros_like(grid[0]), origin="lower", vmin=0.0, vmax=view.grid_vmax,
+            cmap="magma", aspect="equal",
+        )
+        _mark_truth(ax, view)
+        # Where this observer would answer right now. Reading it against the
+        # green truth box is the whole question the episode is asking.
+        (mode,) = ax.plot(
+            [], [], marker="o", ms=7, mfc="none", mec="white", mew=1.8, ls="none",
+            label="mode",
+        )
+        _label_grid(ax, view, title)
+
+        def update(t: int) -> Any:
+            image.set_data(grid[t].T)
+            mode.set_data([modes[t, 0]], [modes[t, 1]])
+            return image
+
+        return update
+
+    return panel
+
+
+#: The Bayes-optimal posterior over both variables at once.
+joint_posterior_panel = _posterior_panel("joint_grid", "joint")
+
+#: The same grid as a factorized observer would have to represent it.
+naive_posterior_panel = _posterior_panel("naive_grid", "naive (factorized)")
+
+
+def difference_panel(ax: Axes, view: EpisodeView) -> Callable[[int], Any]:
+    """``joint − naive``: where factorizing moves probability mass.
+
+    Red is mass the joint observer holds and the naive one does not; blue is
+    mass the naive one invents. A separable episode stays white throughout —
+    the colour appearing *is* the cost of factorizing, localized on the grid.
+    """
+    grid = view.difference_grid
+    lim = view.difference_vmax
+    image = ax.imshow(
+        np.zeros_like(grid[0]), origin="lower", vmin=-lim, vmax=lim,
+        cmap="RdBu_r", aspect="equal",
+    )
+    _mark_truth(ax, view)
+    _label_grid(ax, view, "joint − naive")
+
+    def update(t: int) -> Any:
+        image.set_data(grid[t].T)
+        return image
+
+    return update
+
+
+def observations_panel(ax: Axes, view: EpisodeView) -> Callable[[int], Any]:
+    """The evidence stream, with everything after the current step hidden.
+
+    Without this it is impossible to tell whether a posterior moved because the
+    evidence changed or because it was still settling on evidence already seen.
+    """
+    obs = view.observations
+    n_steps, n_obs = obs.shape
+    image = ax.imshow(
+        np.zeros_like(obs, dtype=float).T, aspect="auto", cmap="Greys",
+        vmin=0.0, vmax=1.0, origin="lower", interpolation="nearest",
+        extent=(-0.5, n_steps - 0.5, -0.5, n_obs - 0.5),
+    )
+    cursor = ax.axvline(-0.5, color=view.palette.goal, lw=1.8)
+    ax.set_yticks(range(n_obs))
+    label_axes(ax, xlabel="timestep", ylabel="channel", title="evidence so far")
+
+    def update(t: int) -> Any:
+        revealed = np.zeros_like(obs, dtype=float)
+        revealed[: t + 1] = obs[: t + 1]
+        image.set_data(revealed.T)
+        cursor.set_xdata([t, t])
+        return image
+
+    return update
+
+
+def marginal_beliefs_panel(ax: Axes, view: EpisodeView) -> Callable[[int], Any]:
+    """The goal variable's marginal posterior, for both observers.
+
+    Only the goal: it is the variable being scored, and drawing every context
+    variable alongside it makes the panel unreadable as soon as there are more
+    than two. Solid is the joint observer, dashed the naive one, and the dotted
+    line marks the true value.
+    """
+    n_r = view.cfg.n_realizations
+    grid = np.arange(n_r)
+    goal = view.goal_context
+    lines = {}
+    fills = {}  # Dictionary to track the fill collections
+    
+    for name, style, width, alpha in (
+        ("joint", "-", 2.4, 1.0), ("naive", "--", 1.8, 0.75)
+    ):
+        color = view.palette.for_observer(name)
+        
+        (line,) = ax.plot(
+            [], [], ls=style, lw=width, alpha=alpha,
+            color=color, label=name,
+        )
+        # Initialize the fill with an array of zeros to match the x-grid size.
+        # Note: No comma after fill, as it returns a single PolyCollection!
+        fill = ax.fill_between(x=grid, y1=0, y2=0, alpha=0.3, color=color)
+        
+        lines[name] = line
+        fills[name] = fill
+
+    ax.axvline(view.truth[goal], color=view.palette.goal, ls=":", lw=1.4)
+
+    ax.set_xlim(-0.5, n_r - 0.5)
+    ax.set_ylim(0.0, 1.02)
+    ax.legend(fontsize=8)
+    label_axes(ax, xlabel="realization", ylabel="belief",
+               title=f"marginal belief — var {goal} (goal)")
+
+    def update(t: int) -> Any:
+        artists = []
+        for name, line in lines.items():
+            y_data = view.marginal_belief(name)[t, goal]
+            
+            # Update the line
+            line.set_data(grid, y_data)
+            artists.append(line)
+            
+            # Update the fill by removing the old one and drawing a new one
+            fills[name].remove()
+            color = view.palette.for_observer(name)
+            fills[name] = ax.fill_between(x=grid, y1=0, y2=y_data, alpha=0.3, color=color)
+            artists.append(fills[name])
+            
+        return artists
+
+    return update
+
+def regret_panel(ax: Axes, view: EpisodeView) -> Callable[[int], Any]:
+    """Disagreement injected against disagreement realized — both accumulated.
+
+    Two *levels*, both in nats, both for the goal variable:
+
+    * **factorization regret** — how far the naive posterior has drifted from
+      the optimal one. Realized.
+    * **cumulative dis-entanglement** — the running total of per-step update
+      divergence. Injected.
+
+    The gap between them is the point. KL is not additive across sequential
+    Bayesian updates, so a step's divergence turns into regret only in
+    proportion to where the posterior already has mass. Neither curve bounds
+    the other: injected commonly exceeds realized when successive
+    disagreements cancel, and realized can exceed injected when they compound.
+    """
+    goal = view.goal_context
+    regret = view.goal_regret
+    injected = view.cumulative_disentanglement[:, goal]
+
+    (realized_line,) = ax.plot(
+        [], [], color=view.palette.regret, lw=2.4, label="regret (realized)"
+    )
+    (injected_line,) = ax.plot(
+        [], [], color=view.palette.joint, lw=1.8, ls="--",
+        label="dis-entanglement (injected)",
+    )
+    ax.set_xlim(0, max(view.n_steps - 1, 1))
+    ax.set_ylim(0.0, float(max(regret.max(), injected.max())) * 1.1 + 1e-9)
+    ax.grid(alpha=0.25, color=view.palette.grid)
+    ax.legend(fontsize=7, loc="upper left")
+    label_axes(ax, xlabel="timestep", ylabel="nats",
+               title=f"accumulated — var {goal} (goal)")
+
+    def update(t: int) -> Any:
+        span = range(t + 1)
+        realized_line.set_data(span, regret[: t + 1])
+        injected_line.set_data(span, injected[: t + 1])
+        return [realized_line, injected_line]
+
+    return update
+
+
+def regret_rate_panel(ax: Axes, view: EpisodeView) -> Callable[[int], Any]:
+    """The same two quantities as per-step rates, where they are comparable.
+
+    Plotting a rate against an accumulating level crushes the rate, so the
+    step-wise view gets its own panel: the change in regret against the update
+    divergence driving it.
+
+    Note the asymmetry this exposes. Update divergence is a KL, so it is never
+    negative; the change in regret is negative on roughly 43% of steps, because
+    the naive posterior drifts back toward the optimal one as often as away.
+    The update predicts how far regret *moves*, not which way — which is why it
+    tracks the magnitude of the change far better than its signed value.
+    """
+    goal = view.goal_context
+    delta = np.diff(view.goal_regret, prepend=0.0)
+    updates = view.disentanglement[:, goal]
+
+    (delta_line,) = ax.plot(
+        [], [], color=view.palette.regret, lw=2.2, label="change in regret"
+    )
+    (update_line,) = ax.plot(
+        [], [], color=view.palette.joint, lw=1.8, ls="--",
+        label="dis-entanglement",
+    )
+    ax.axhline(0.0, color=view.palette.truth, lw=0.8, alpha=0.5)
+    ax.set_xlim(0, max(view.n_steps - 1, 1))
+    lim = float(max(np.abs(delta).max(), updates.max())) * 1.15 + 1e-9
+    ax.set_ylim(-lim, lim)
+    ax.grid(alpha=0.25, color=view.palette.grid)
+    ax.legend(fontsize=7, loc="upper left")
+    label_axes(ax, xlabel="timestep", ylabel="nats / step",
+               title=f"per step — var {goal} (goal)")
+
+    def update(t: int) -> Any:
+        span = range(t + 1)
+        delta_line.set_data(span, delta[: t + 1])
+        update_line.set_data(span, updates[: t + 1])
+        return [delta_line, update_line]
+
+    return update
+
+
+#: Panels that draw the realization grid. These go on the top row.
+GRID_PANELS: tuple[Panel, ...] = (
+    joint_posterior_panel,
+    naive_posterior_panel,
+    difference_panel,
+)
+
+#: Panels that evolve along the time axis. These go underneath.
+TRACE_PANELS: tuple[Panel, ...] = (observations_panel,)
+
+#: The two-variable default layout. :func:`default_panels` adapts it.
+DEFAULT_PANELS: tuple[tuple[Panel, ...], ...] = (GRID_PANELS, TRACE_PANELS)
+
+
+def default_panels(
+    n_contexts: int, extended: bool = False
+) -> tuple[tuple[Panel, ...], ...]:
+    """Panels suited to this many active variables.
+
+    The realization grid is inherently two-dimensional, so the layout has to
+    adapt rather than assume:
+
+    * **one variable** — there is no pair and the two observers coincide, so the
+      grids are dropped entirely and the marginals carry the figure.
+    * **two** — the full posterior *is* the grid; draw it.
+    * **three or more** — the posterior is ``R ** n_contexts`` wide and cannot be
+      drawn, so the grids show one pair projected out of it, chosen by
+      :func:`~coggrid.viz.display_pairs` to involve the goal variable.
+
+    ``extended`` adds the per-variable marginals and, where the observers differ,
+    how history-dependent their updates are.
+    """
+    state: list[Panel] = []
+    if n_contexts >= 2:
+        state += list(GRID_PANELS)
+    if extended or n_contexts < 2:
+        state.append(marginal_beliefs_panel)
+
+    evolving: list[Panel] = list(TRACE_PANELS)
+    if extended and n_contexts >= 2:
+        evolving += [regret_panel, regret_rate_panel]
+    return (tuple(state), tuple(evolving))
+
+
+# --------------------------------------------------------------------------- #
+# the animation
+# --------------------------------------------------------------------------- #
+def _as_rows(panels: Sequence[Any]) -> list[list[Panel]]:
+    """Accept either one flat row of panels, or a sequence of rows."""
+    items = list(panels)
+    if not items:
+        raise ValueError("animate_episode needs at least one panel")
+    if all(callable(p) for p in items):
+        return [items]
+    if any(callable(p) for p in items):
+        raise ValueError(
+            "`panels` must be either all panel callables (a single row) or all "
+            "sequences of them (one per row), not a mix"
+        )
+    rows = [list(row) for row in items]
+    for row in rows:
+        if not row:
+            raise ValueError("`panels` contains an empty row")
+        if not all(callable(p) for p in row):
+            raise ValueError("every entry of a panel row must be callable")
+    return rows
+
+
+class EpisodeAnimation:
+    """A rendered episode that plays itself in a notebook.
+
+    Wraps a ``FuncAnimation`` so that being the last expression in a cell is
+    enough to see it — no ``to_jshtml`` and no ffmpeg. The figure is deliberately
+    *not* registered with pyplot, because the inline backend would otherwise also
+    emit a single still frame alongside the animation.
+    """
+
+    def __init__(
+        self, fig: Figure, anim: FuncAnimation, fps: int, n_frames: int
+    ) -> None:
+        self.fig = fig
+        self.anim = anim
+        self.fps = fps
+        #: Frame count, tracked here because matplotlib keeps its own private.
+        self.n_frames = n_frames
+        self._gif: bytes | None = None
+
+    def save(self, path: str | Path) -> Path:
+        """Write the animation to a GIF and return the path."""
+        path = Path(path).with_suffix(".gif")
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_bytes(self.to_gif())
+        return path
+
+    def to_gif(self) -> bytes:
+        """Encode once and cache; a re-display should not re-render every frame."""
+        if self._gif is None:
+            # matplotlib resolves the output path on disk, so an in-memory
+            # buffer is not an option here.
+            with tempfile.TemporaryDirectory() as tmp:
+                scratch = Path(tmp) / "episode.gif"
+                self.anim.save(scratch, writer=PillowWriter(fps=self.fps))
+                self._gif = scratch.read_bytes()
+        return self._gif
+
+    def to_html(self) -> str:
+        """An HTML5 player with scrub and loop controls.
+
+        Heavier than the GIF and needs the renderer to run inline JavaScript,
+        but it lets you step through frame by frame.
+        """
+        return self.anim.to_jshtml(fps=self.fps)
+
+    def display(self) -> bool:
+        """Show this inline if we are under an IPython kernel; else do nothing.
+
+        Being the last expression in a cell is enough on its own — this exists
+        for scripts, where ``%run`` never echoes a trailing expression. Returns
+        whether anything was displayed.
+        """
+        try:
+            from IPython import get_ipython
+            from IPython.display import display as ipy_display
+        except ModuleNotFoundError:  # pragma: no cover - depends on environment
+            return False
+        shell = get_ipython()
+        if shell is None or getattr(shell, "kernel", None) is None:
+            return False
+        ipy_display(self)
+        return True
+
+    def _repr_mimebundle_(self, include=None, exclude=None) -> dict[str, Any]:
+        return {"image/gif": self.to_gif(), "text/plain": repr(self)}
+
+    def __repr__(self) -> str:  # pragma: no cover - cosmetic
+        return (
+            f"EpisodeAnimation(frames={self.n_frames}, fps={self.fps}, "
+            f"panels={len(self.fig.axes)})"
+        )
+
+
+def animate_episode(
+    batch: EpisodeBatch,
+    traces: Mapping[str, BeliefTrace],
+    episode: int = 0,
+    *,
+    panels: Sequence[Any] | None = None,
+    extended: bool = False,
+    fps: int = 6,
+    max_pairs: int = MAX_PAIRS,
+    palette: Palette = PALETTE,
+    figsize: tuple[float, float] | None = None,
+) -> EpisodeAnimation:
+    """Play one episode back as evidence accumulates.
+
+    Parameters
+    ----------
+    batch, traces:
+        An :class:`~coggrid.EpisodeBatch` and the output of
+        :func:`~coggrid.run_observers` over it.
+    episode:
+        Which episode of the batch to play.
+    panels:
+        Either a flat sequence of panels (one row) or a sequence of rows.
+        Defaults to :func:`default_panels`, which adapts to ``n_contexts``.
+    extended:
+        Also show the per-variable marginals and how history-dependent the
+        marginal updates are. Cannot be combined with an explicit ``panels``;
+        build on ``default_panels(n_contexts, extended=True)`` instead.
+    fps:
+        Playback rate, also the GIF frame rate.
+    symmetric:
+        Whether *both* divergences — factorization regret and update
+        dis-entanglement — average the two KL directions. Applies to both
+        together, so the panels never mix conventions.
+    baseline:
+        What the joint observer's update is compared against: ``"history"``
+        isolates history dependence, ``"naive"`` gives the direct joint-vs-naive
+        contrast. See :class:`EpisodeView`.
+
+    Examples
+    --------
+    >>> from coggrid import CogGridConfig, World, run_observers
+    >>> from coggrid.viz import animate_episode
+    >>> cfg = CogGridConfig(n_vars=60, n_realizations=5, n_steps=12, seed=0)
+    >>> batch = World(cfg).sample_episodes(4)
+    >>> clip = animate_episode(batch, run_observers(batch))
+    >>> clip.n_frames
+    12
+    >>> len(clip.to_gif()) > 0   # renders once, then caches
+    True
+    """
+    if panels is None:
+        panels = default_panels(batch.cfg.n_contexts, extended)
+    rows = _as_rows(panels)
+
+    view = EpisodeView(
+        batch=batch, traces=traces, episode=episode, palette=palette,
+        max_pairs=max_pairs,
+    )
+    heights = [GRID_ROW_HEIGHT] + [TRACE_ROW_HEIGHT] * (len(rows) - 1)
+    figsize = figsize or (PANEL_WIDTH * max(map(len, rows)), sum(heights))
+
+    # Not plt.subplots: a pyplot-managed figure is auto-rendered by the inline
+    # backend as a still frame, which would appear beside the animation.
+    fig = Figure(figsize=figsize, layout="constrained")
+    outer = fig.add_gridspec(len(rows), 1, height_ratios=heights)
+
+    updaters = []
+    for r, row in enumerate(rows):
+        cells = outer[r].subgridspec(1, len(row))
+        for c, panel in enumerate(row):
+            updaters.append(panel(fig.add_subplot(cells[0, c]), view))
+
+    split, n_steps = batch.split, view.n_steps
+    shown = ""
+    if view.primary_pair is not None and batch.cfg.n_contexts > 2:
+        shown = f",  grids show vars {view.primary_pair[0]}x{view.primary_pair[1]}"
+
+    def draw(t: int) -> list[Any]:
+        artists = [update(t) for update in updaters]
+        fig.suptitle(
+            f"episode {episode} ({split} split) — step {t + 1}/{n_steps}"
+            f"    green = goal / truth,  orange = context{shown}",
+            fontsize=11,
+        )
+        return artists
+
+    anim = FuncAnimation(
+        fig, draw, frames=n_steps, interval=1000 // fps, blit=False
+    )
+    return EpisodeAnimation(fig, anim, fps, n_frames=n_steps)
