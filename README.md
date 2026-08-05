@@ -14,8 +14,7 @@ own training loop.
 
 Latent variables interact *pairwise* to produce observation statistics, so the
 observation distribution does not factorize over them. An agent that represents
-the latent space as independent factors is therefore provably lossy — and the
-size of that loss is the quantity this environment exists to measure.
+the latent space as independent factors is therefore provably lossy.
 
 <p align="center">
   <img src="docs/images/episode_animation.gif" alt="An episode playing back: joint and naive posteriors, their difference, and the metrics that separate them" width="100%">
@@ -24,8 +23,7 @@ size of that loss is the quantity this environment exists to measure.
 <p align="center"><em>
 One episode, as evidence accumulates. Top: the optimal observer's posterior, the
 posterior a factorized observer stands behind, and where they disagree. Bottom:
-the evidence stream, the goal variable's marginal belief, and the two metrics
-below.
+the evidence stream.
 </em></p>
 
 ---
@@ -80,7 +78,7 @@ pushed the belief from optimal.
 The middle panel is the point. Binned by regret, the joint observer's accuracy is
 essentially flat while the naive observer's collapses. Regret is **not** a
 measure of how hard an episode is — a hard episode would hurt both. It is
-specifically a measure of how much *factorizing* costs on that episode. The
+specifically a measure of 'naunce': how much *factorizing* costs on that episode. The
 correlation behind each curve is printed in the panel's legend.
 
 ```python
@@ -94,12 +92,7 @@ disentanglement(traces["joint"], traces["naive"], batch) # (n_episodes, n_steps)
 measure: the Jeffreys divergence between the naive marginal likelihood
 `p(o_t | r)` and the history-conditioned one `p(o_t | r, o_1:t-1)`. It is zero
 exactly when the marginal belief dynamics are Markovian, so it captures how much
-of a step's update was carried by what came before.
-
-The two are a **flow and a stock**, and neither bounds the other — KL is not
-additive across sequential Bayesian updates. Regret *decreases* on a large
-fraction of steps, which a per-step divergence cannot: dis-entanglement predicts
-how far the belief moves, not which way.
+of a step's update depends on what came before.
 
 ---
 
@@ -150,9 +143,8 @@ world.sample_episodes(1000, split="train")      # <=1 novel variable, goal alway
 world.sample_episodes(1000, split="held_out")   # every active variable novel
 ```
 
-`"train"` is the compositional condition: a novel variable appears alongside
-familiar ones and the agent is scored on a familiar one. `"held_out"` is the
-harder case where nothing in the episode has been seen.
+`"train"` is a condition where a subset of the variables are never the goal and never co-occur. `"held_out"` is the
+a condition where no variables in the episode have been a goal, nor co-occured, during training.
 
 ---
 
@@ -374,11 +366,6 @@ Numerical notes worth knowing:
 
 Use **this** repo if you want the task. Use the paper repo to reproduce published
 results.
-
-The two agree numerically: this environment and the paper's were checked against
-each other by replaying the published trained networks through this code and
-confirming their accuracy, their belief trajectories, and the response of their
-hidden-state activity to dis-entanglement all reproduce.
 
 ---
 
