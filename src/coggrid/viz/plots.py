@@ -734,28 +734,51 @@ def _wave_at(cfg, waveform: np.ndarray, position: np.ndarray) -> np.ndarray:
                      period=1.0)
 
 
-def _draw_angle(ax, cosine: float, baseline: float, colour: str,
-                tips: tuple[str, str]) -> None:
-    """Draw one key/query pair as arrows on a unit circle, ``cosine`` apart.
+#: Interaction strengths get their own colour throughout the phase figure, so
+#: that variable colours can mean "which variable owns this vector" and nothing
+#: else.
+PHASE_COLOR = "#7b52ab"
 
-    The two vectors span a plane, and they are drawn *in that plane*, so the
-    angle between the arrows is the true angle in the full embedding space — not
-    a projection of it. Only the absolute orientation is arbitrary, which is why
-    each pair gets its own ``baseline``.
+
+def _standard_waveform(cfg, n_samples: int = 2001) -> np.ndarray:
+    """The one potential waveform every variable is a phase-shifted copy of.
+
+    Recovered by reading realization 0 as the interaction strength sweeps a full
+    turn, which is the same thing as evaluating the waveform at every phase.
+    """
+    turn = np.linspace(0.0, 1.0, n_samples)[:-1]
+    return gen.realization_potential(turn, gen.value_profile(cfg), cfg.n_roll)[:, 0]
+
+
+def _wave_at(cfg, waveform: np.ndarray, position: np.ndarray) -> np.ndarray:
+    """Evaluate the standard waveform at a continuous circular ``position``."""
+    turn = np.linspace(0.0, 1.0, waveform.size + 1)[:-1]
+    return np.interp(np.mod(position, cfg.n_roll) / cfg.n_roll, turn, waveform,
+                     period=1.0)
+
+
+def _draw_angle(ax, cosine: float, baseline: float, colours: tuple[str, str],
+                tips: tuple[str, str], label: str) -> None:
+    """Draw one key/query pair as arrows on a unit circle, ``arccos(cosine)`` apart.
+
+    The two vectors span a plane and are drawn *in that plane*, so the angle
+    between the arrows is their true angle in the full embedding space rather
+    than a projection of it. Only the absolute orientation is arbitrary, which is
+    why each pair gets its own ``baseline``.
     """
     theta = np.arccos(np.clip(cosine, -1.0, 1.0))
-    arrows = ((baseline, "-", tips[0]), (baseline + theta, "--", tips[1]))
-    for angle, style, tip in arrows:
+    arrows = ((baseline, colours[0], tips[0]), (baseline + theta, colours[1], tips[1]))
+    for angle, colour, tip in arrows:
         ax.annotate("", xy=(np.cos(angle), np.sin(angle)), xytext=(0, 0),
-                    arrowprops=dict(arrowstyle="-|>", color=colour, lw=2.0,
-                                    linestyle=style, shrinkA=0, shrinkB=0))
-        ax.text(1.16 * np.cos(angle), 1.16 * np.sin(angle), tip, color=colour,
-                ha="center", va="center", fontsize=10, weight="bold")
+                    arrowprops=dict(arrowstyle="-|>", color=colour, lw=2.2,
+                                    shrinkA=0, shrinkB=0))
+        ax.text(1.2 * np.cos(angle), 1.2 * np.sin(angle), tip, color=colour,
+                ha="center", va="center", fontsize=11)
     arc = np.linspace(baseline, baseline + theta, 60)
-    ax.plot(0.42 * np.cos(arc), 0.42 * np.sin(arc), color=colour, lw=1.2)
+    ax.plot(0.45 * np.cos(arc), 0.45 * np.sin(arc), color=PHASE_COLOR, lw=1.4)
     mid = baseline + theta / 2
-    ax.text(0.62 * np.cos(mid), 0.62 * np.sin(mid), f"{cosine:+.2f}", color=colour,
-            ha="center", va="center", fontsize=9)
+    ax.text(0.72 * np.cos(mid), 0.72 * np.sin(mid), label, color=PHASE_COLOR,
+            ha="center", va="center", fontsize=10)
 
 
 def plot_interaction_phases(
@@ -776,23 +799,25 @@ def plot_interaction_phases(
     variable's key and the other's query sets a phase, and the phase translates
     the pattern. The shape never changes.
 
-    One row per observation channel, and each row reads left to right:
+    One row per observation channel, reading left to right:
 
-    1. **Embeddings.** The key and query whose angle matters, drawn on a unit
-       circle. The cosine of that angle *is* the interaction strength, because
-       the embeddings are unit vectors. Both directions appear —
-       ``<K_i, Q_j>`` and ``<K_j, Q_i>`` — and they differ, which is what stops
-       the joint from being symmetric.
+    1. **Embeddings.** The key and query whose angle matters. Both are unit
+       vectors, so the cosine of that angle *is* the interaction strength ``z``.
+       Arrow colour says which variable owns the vector; ``z`` is drawn in its
+       own colour because it belongs to neither. Both directions appear, and
+       they differ — that asymmetry is what stops the joint from being symmetric.
     2. **Phase.** One waveform, read from two starting points. Both variables
        sample the same curve; their strengths only say where to start.
-    3. **The standard pattern**, over a full turn in both variables, with the
-       window this channel selects.
+    3. **The standard pattern**, with the window this channel selects. The
+       pattern is periodic, so it is drawn over two turns and the window is a
+       single box — a window that runs off one edge simply continues on the next
+       copy.
     4. **The rate table** that window yields.
 
-    Comparing the rows is the point: same pattern, different angles, different
-    window, different table. Two channels are drawn rather than all of them
-    because the channels are constructed to be independent, so two is enough to
-    show they do not move together.
+    Comparing the rows is the point: same waveform, same pattern, different
+    angles, different window, different table. Two channels are drawn rather than
+    all of them because the embeddings are orthogonalized across channels, so two
+    is enough to show the phases move independently.
 
     This describes the **built-in** likelihood. Passing your own ``likelihood=``
     to :class:`~coggrid.World` replaces the mechanism, and only the last column
@@ -837,64 +862,69 @@ def plot_interaction_phases(
     truth = batch.ctx_vals[episode]
 
     if figsize is None:
-        figsize = (15.0, 3.7 * len(channels))
+        figsize = (15.0, 3.9 * len(channels))
     if fig is None:
         fig = plt.figure(figsize=figsize, layout="constrained")
     axes = fig.subplots(len(channels), 4, squeeze=False)
 
-    # The standard pattern is the same in every row; that is the whole claim.
+    # The standard pattern is identical in every row — that is the whole claim.
+    # Drawn over two turns so a window that crosses the wrap stays one box.
     fine = np.arange(n_roll * 4) / 4.0
-    pattern = gen.sigmoid(np.outer(_wave_at(cfg, waveform, fine),
-                                   _wave_at(cfg, waveform, fine)))
+    tile = gen.sigmoid(np.outer(_wave_at(cfg, waveform, fine),
+                                _wave_at(cfg, waveform, fine)))
+    pattern = np.tile(tile, (2, 2))
 
     for row, channel in enumerate(channels):
-        # ── 1: the embeddings, and the angle between them
-        # Read from the batch rather than recomputed, so the panel cannot drift
-        # from the strengths the environment actually used.
+        # Read from the batch, so the panel cannot drift from the strengths the
+        # environment actually used.
         z_ij = float(batch.interactions[episode, channel,
                                         _pair_rank(i, j, cfg.n_contexts)])
         z_ji = float(batch.interactions[episode, channel,
                                         _pair_rank(j, i, cfg.n_contexts)])
 
+        # ── 1: the embeddings, and the angle between them
         ax = axes[row][0]
         circle = np.linspace(0, 2 * np.pi, 200)
         ax.plot(np.cos(circle), np.sin(circle), color=palette.grid, lw=1.0, ls=":")
-        _draw_angle(ax, z_ij, np.pi / 2, colour_i, (f"$K_{i}$", f"$Q_{j}$"))
-        _draw_angle(ax, z_ji, -np.pi / 2, colour_j, (f"$K_{j}$", f"$Q_{i}$"))
-        ax.set_xlim(-1.5, 1.5), ax.set_ylim(-1.5, 1.5)
+        _draw_angle(ax, z_ij, np.pi / 2, (colour_i, colour_j),
+                    (f"$K_{i}$", f"$Q_{j}$"), f"$z_{{{i}{j}}}$={z_ij:+.2f}")
+        _draw_angle(ax, z_ji, -np.pi / 2, (colour_j, colour_i),
+                    (f"$K_{j}$", f"$Q_{i}$"), f"$z_{{{j}{i}}}$={z_ji:+.2f}")
+        ax.set_xlim(-1.55, 1.55), ax.set_ylim(-1.55, 1.55)
         ax.set_aspect("equal"), ax.set_xticks([]), ax.set_yticks([])
         for spine in ax.spines.values():
             spine.set_visible(False)
         ax.set_title(f"channel {channel}: embeddings", fontsize=10)
-        ax.set_xlabel(r"$z = \cos\theta$  (embeddings are unit vectors)",
-                      fontsize=8, color="0.4")
+        ax.set_xlabel(r"$z = \cos\theta$  (unit vectors)", fontsize=8, color="0.4")
 
         # ── 2: one waveform, two starting phases
         ax = axes[row][1]
         turn = np.arange(n_roll * 8) / 8.0
         ax.plot(turn, _wave_at(cfg, waveform, turn), color="0.4", lw=1.4,
                 label="standard waveform")
-        for c, z, colour, marker in ((i, z_ij, colour_i, "o"),
-                                     (j, z_ji, colour_j, "s")):
+        for c, other, z, colour, marker in ((i, j, z_ij, colour_i, "o"),
+                                            (j, i, z_ji, colour_j, "s")):
             pos = z * n_roll - realizations
             ax.plot(np.mod(pos, n_roll), _wave_at(cfg, waveform, pos), marker,
-                    ms=6, color=colour, label=f"var {c}")
+                    ms=6, color=colour, label=f"var {c}  (phase $z_{{{c}{other}}}$)")
         ax.set_title("one waveform, two phases", fontsize=10)
         ax.set_xlabel("phase (slots)", fontsize=9)
         ax.set_ylabel("potential", fontsize=9)
         ax.grid(alpha=0.25, color=palette.grid)
-        if row == 0:
-            ax.legend(fontsize=8, frameon=False, loc="lower right")
+        ax.legend(fontsize=8, frameon=False, loc="lower right")
 
         # ── 3: which window of the standard pattern this channel picks
         ax = axes[row][2]
         ax.imshow(pattern.T, origin="lower", cmap="magma", vmin=0.0, vmax=1.0,
-                  extent=(0, n_roll, 0, n_roll))
-        window_i = np.mod(z_ij * n_roll - realizations, n_roll)
-        window_j = np.mod(z_ji * n_roll - realizations, n_roll)
-        ax.plot(np.repeat(window_i, n_r), np.tile(window_j, n_r), ".",
-                color=palette.goal, ms=3.0)
-        ax.set_title("the standard pattern", fontsize=10)
+                  extent=(0, 2 * n_roll, 0, 2 * n_roll))
+        lo_i = np.mod(z_ij * n_roll - (n_r - 1), n_roll)
+        lo_j = np.mod(z_ji * n_roll - (n_r - 1), n_roll)
+        ax.add_patch(Rectangle((lo_i, lo_j), n_r - 1, n_r - 1, edgecolor=palette.goal,
+                               facecolor="none", lw=2.2))
+        for edge in (n_roll,):  # where the pattern starts repeating
+            ax.axvline(edge, color="white", lw=0.8, alpha=0.45)
+            ax.axhline(edge, color="white", lw=0.8, alpha=0.45)
+        ax.set_title("the standard pattern (2 turns)", fontsize=10)
         ax.set_xlabel(f"phase of var {i}", fontsize=9)
         ax.set_ylabel(f"phase of var {j}", fontsize=9)
 

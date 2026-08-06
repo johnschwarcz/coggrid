@@ -146,16 +146,18 @@ One row per observation channel, reading left to right:
 
 1. **Embeddings.** Each latent variable carries a **key** and a **query** vector
    per channel. Both are unit vectors, so the cosine of the angle between one
-   variable's key and the other's query *is* the interaction strength `z`. Both
-   directions are drawn — `⟨K_i, Q_j⟩` and `⟨K_j, Q_i⟩` — and they differ, which
-   is what stops the joint from being symmetric. The arrows are drawn in the
-   plane the two vectors actually span, so the angle you see is the real one, not
-   a projection.
+   variable's key and the other's query *is* the interaction strength `z`. Arrow
+   colour says which variable owns the vector; `z` has its own colour because it
+   belongs to neither. Both directions are drawn — `z₀₁` and `z₁₀` — and they
+   differ, which is what stops the joint from being symmetric. The arrows sit in
+   the plane the two vectors actually span, so the angle you see is the real one,
+   not a projection of it.
 2. **Phase.** The potential over realizations is a single sinusoid shifted by
    `−2π · likelihood_freq · z`. Both variables read the *same* waveform; their
    strengths only say where to start.
-3. **The standard pattern**, over a full turn in both variables, with the window
-   this channel selects.
+3. **The standard pattern**, with the window this channel selects. Phase is
+   periodic, so the pattern is drawn over two turns: a window that runs off one
+   edge continues on the next copy, and stays a single box.
 4. **The rate table** that window yields.
 
 Comparing the rows is the point: same waveform, same pattern, different angles,
