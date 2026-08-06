@@ -26,6 +26,7 @@ from typing import Any
 
 import matplotlib.pyplot as plt
 import numpy as np
+from matplotlib import patheffects
 from matplotlib.colors import LinearSegmentedColormap
 from matplotlib.figure import Figure
 from matplotlib.patches import Rectangle
@@ -740,6 +741,24 @@ def _wave_at(cfg, waveform: np.ndarray, position: np.ndarray) -> np.ndarray:
 PHASE_COLOR = "#7b52ab"
 
 
+def _mark_cell(ax: plt.Axes, x: float, y: float, lw: float = 1.8) -> None:
+    """Outline the realization that actually occurred.
+
+    Deliberately *not* a variable colour: green and orange say which variable an
+    element belongs to, and the truth belongs to both. White alone would vanish
+    at the light end of ``magma`` and black at the dark end, so it is drawn white
+    over a dark stroke and stays legible against any rate.
+    """
+    # clip_on=False so the stroke stays a closed box when the truth sits on an
+    # edge cell, rather than being shaved off by the axes limit.
+    patch = Rectangle((x - 0.5, y - 0.5), 1, 1, edgecolor="white",
+                      facecolor="none", lw=lw, clip_on=False)
+    patch.set_path_effects(
+        [patheffects.withStroke(linewidth=lw + 1.8, foreground="#1a1a1a")]
+    )
+    ax.add_patch(patch)
+
+
 def _standard_waveform(cfg, n_samples: int = 2001) -> np.ndarray:
     """The one potential waveform every variable is a phase-shifted copy of.
 
@@ -808,11 +827,16 @@ def plot_interaction_phases(
        they differ — that asymmetry is what stops the joint from being symmetric.
     2. **Phase.** One waveform, read from two starting points. Both variables
        sample the same curve; their strengths only say where to start.
-    3. **The standard pattern**, with the window this channel selects. The
-       pattern is periodic, so it is drawn over two turns and the window is a
-       single box — a window that runs off one edge simply continues on the next
-       copy.
-    4. **The rate table** that window yields.
+    3. **The standard pattern**, with the window this channel selects. Each pair
+       of box edges takes the colour of the variable whose phase range it spans.
+       The pattern is periodic, so it is drawn over two turns and the window
+       stays a single box — one that runs off an edge continues on the next copy.
+    4. **The rate table** that window yields, with the realization that actually
+       occurred outlined in white.
+
+    Colour means exactly one thing here: **which variable** an element belongs
+    to. The interaction strengths and the true realization belong to neither
+    variable, so they get their own marks rather than borrowing a variable's.
 
     Comparing the rows is the point: same waveform, same pattern, different
     angles, different window, different table. Two channels are drawn rather than
@@ -919,8 +943,12 @@ def plot_interaction_phases(
                   extent=(0, 2 * n_roll, 0, 2 * n_roll))
         lo_i = np.mod(z_ij * n_roll - (n_r - 1), n_roll)
         lo_j = np.mod(z_ji * n_roll - (n_r - 1), n_roll)
-        ax.add_patch(Rectangle((lo_i, lo_j), n_r - 1, n_r - 1, edgecolor=palette.goal,
-                               facecolor="none", lw=2.2))
+        span = n_r - 1
+        # Each pair of edges is drawn in the colour of the variable whose phase
+        # range it spans, so the box says which axis is which.
+        for offset in (0, span):
+            ax.plot([lo_i, lo_i + span], [lo_j + offset] * 2, color=colour_i, lw=2.4)
+            ax.plot([lo_i + offset] * 2, [lo_j, lo_j + span], color=colour_j, lw=2.4)
         for edge in (n_roll,):  # where the pattern starts repeating
             ax.axvline(edge, color="white", lw=0.8, alpha=0.45)
             ax.axhline(edge, color="white", lw=0.8, alpha=0.45)
@@ -932,8 +960,7 @@ def plot_interaction_phases(
         ax = axes[row][3]
         table = _pair_slice(batch.rates[episode, channel], i, j, cfg.n_contexts)
         ax.imshow(table.T, origin="lower", cmap="magma", vmin=0.0, vmax=1.0)
-        ax.add_patch(Rectangle((truth[i] - 0.5, truth[j] - 0.5), 1, 1,
-                               edgecolor=palette.goal, facecolor="none", lw=2.0))
+        _mark_cell(ax, truth[i], truth[j], lw=2.0)
         ax.set_title("the rate table", fontsize=10)
         ax.set_xlabel(f"var {i} realization", fontsize=9)
         ax.set_ylabel(f"var {j} realization", fontsize=9)
@@ -1032,8 +1059,7 @@ def plot_evidence_likelihood(
 
     def _mark(ax):
         if cfg.n_contexts > 1:
-            ax.add_patch(Rectangle((truth[i] - 0.5, truth[j] - 0.5), 1, 1,
-                                   edgecolor=palette.goal, facecolor="none", lw=1.4))
+            _mark_cell(ax, truth[i], truth[j], lw=1.4)
 
     channel_axes = top.subplots(1, cfg.n_observations, squeeze=False)[0]
     for c, ax in enumerate(channel_axes):

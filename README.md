@@ -155,10 +155,16 @@ One row per observation channel, reading left to right:
 2. **Phase.** The potential over realizations is a single sinusoid shifted by
    `−2π · likelihood_freq · z`. Both variables read the *same* waveform; their
    strengths only say where to start.
-3. **The standard pattern**, with the window this channel selects. Phase is
-   periodic, so the pattern is drawn over two turns: a window that runs off one
-   edge continues on the next copy, and stays a single box.
-4. **The rate table** that window yields.
+3. **The standard pattern**, with the window this channel selects. Each pair of
+   box edges takes the colour of the variable whose phase range it spans. Phase
+   is periodic, so the pattern is drawn over two turns: a window that runs off
+   one edge continues on the next copy, and stays a single box.
+4. **The rate table** that window yields, with the realization that actually
+   occurred outlined in white.
+
+Colour means exactly one thing throughout: **which variable** an element belongs
+to. Interaction strengths and the true realization belong to neither, so they get
+their own marks rather than borrowing a variable's.
 
 Comparing the rows is the point: same waveform, same pattern, different angles,
 different window, different table. Embeddings are orthogonalized across channels,
