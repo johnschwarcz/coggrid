@@ -178,6 +178,81 @@ class TestStaticFigures:
     def test_summary_figure_shape(self, batch, traces):
         assert len(summary_figure(batch, traces)) == 4
 
+    @pytest.mark.parametrize("n_contexts", [1, 2, 3])
+    def test_likelihood_construction_draws_four_steps(self, n_contexts):
+        """The construction figure is a fixed four-panel story at any width."""
+        from coggrid.viz import plot_likelihood_construction
+
+        world = World(SMALL.replace(n_contexts=n_contexts))
+        fig = plot_likelihood_construction(world.sample_episodes(4), episode=0)
+        assert len(fig.axes) == 4
+
+    def test_likelihood_construction_last_panel_is_the_real_table(self):
+        """Panel 4 must be read from ``batch.rates``, not rebuilt approximately.
+
+        The first three panels illustrate the built-in model; the last one has to
+        stay true even when a custom ``likelihood=`` made the others meaningless.
+        """
+        from coggrid.viz import plot_likelihood_construction
+
+        batch = World(SMALL.replace(n_contexts=2)).sample_episodes(4)
+        fig = plot_likelihood_construction(batch, episode=0, channel=0)
+        drawn = np.asarray(fig.axes[3].get_images()[0].get_array())
+        # Compared as multisets: which variable lands on which axis depends on
+        # where the goal fell, and that is not what this test is about.
+        assert np.allclose(np.sort(drawn, axis=None),
+                           np.sort(batch.rates[0, 0], axis=None))
+
+    def test_evidence_likelihood_draws_every_vector(self):
+        """One panel per channel, plus one per possible observation vector."""
+        from coggrid.viz import plot_evidence_likelihood
+
+        cfg = SMALL.replace(n_contexts=2, n_observations=4)
+        fig = plot_evidence_likelihood(World(cfg).sample_episodes(4), episode=0)
+        assert len(fig.axes) == cfg.n_observations + 2**cfg.n_observations
+
+    def test_evidence_likelihood_caps_the_grid(self):
+        """2**n_observations explodes, so a wide batch must subsample instead."""
+        from coggrid.viz import plot_evidence_likelihood
+
+        cfg = SMALL.replace(n_contexts=2, n_observations=10, embedding_dim=30)
+        fig = plot_evidence_likelihood(
+            World(cfg).sample_episodes(2), episode=0, max_vectors=8
+        )
+        assert len(fig.axes) == cfg.n_observations + 8
+
+    def test_evidence_likelihood_is_the_bernoulli_product(self):
+        """Each panel must be the normalized product of the channel rates.
+
+        Derived here straight from ``batch.rates`` rather than from anything the
+        plotting code shares, so an error in the einsum cannot cancel out.
+        """
+        from coggrid.viz import plot_evidence_likelihood
+
+        cfg = SMALL.replace(n_contexts=2, n_observations=3)
+        batch = World(cfg).sample_episodes(4)
+        fig = plot_evidence_likelihood(batch, episode=0)
+
+        rates = batch.rates[0]                       # (n_obs, R, R)
+        for vector in range(2**cfg.n_observations):
+            bits = [(vector >> c) & 1 for c in range(cfg.n_observations)]
+            expected = np.ones_like(rates[0])
+            for c, bit in enumerate(bits):
+                expected = expected * (rates[c] if bit else 1.0 - rates[c])
+            expected = expected / expected.max()
+            drawn = np.asarray(
+                fig.axes[cfg.n_observations + vector].get_images()[0].get_array()
+            )
+            assert np.allclose(np.sort(drawn, axis=None),
+                               np.sort(expected, axis=None), atol=1e-9)
+
+    def test_pair_rank_matches_the_interaction_layout(self):
+        """``interactions`` stores (0,1), (1,0), (0,2), (2,0), ... in that order."""
+        from coggrid.viz.plots import _pair_rank
+
+        assert [_pair_rank(i, j, 3) for i, j in
+                ((0, 1), (1, 0), (0, 2), (2, 0), (1, 2), (2, 1))] == [0, 1, 2, 3, 4, 5]
+
     def test_single_context_drops_comparisons(self):
         """With one variable the observers coincide, so contrasts are degenerate."""
         world = World(SMALL.replace(n_contexts=1))

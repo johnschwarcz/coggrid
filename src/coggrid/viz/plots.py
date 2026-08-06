@@ -27,6 +27,7 @@ from matplotlib.colors import LinearSegmentedColormap
 from matplotlib.figure import Figure
 from matplotlib.patches import Rectangle
 
+from .. import generative as gen
 from ..observers import BeliefTrace, factorization_regret
 from ..world import EpisodeBatch
 from .style import PALETTE, Palette, label_axes, transparent_cmap
@@ -35,6 +36,8 @@ __all__ = [
     "display_pairs",
     "MAX_PAIRS",
     "plot_likelihood",
+    "plot_likelihood_construction",
+    "plot_evidence_likelihood",
     "plot_trial",
     "plot_episode",
     "plot_performance",
@@ -678,6 +681,248 @@ def plot_relative_accuracy(
     ax.set_xlim(0, hi)
     ax.set_ylim(0, hi)
     ax.grid(alpha=0.25, color=palette.grid)
+    return fig
+
+
+def _pair_rank(i: int, j: int, n_contexts: int) -> int:
+    """Index of the ordered pair ``(i, j)`` within ``EpisodeBatch.interactions``.
+
+    ``joint_likelihood`` stores two strengths per unordered pair, in the order
+    ``(0,1), (1,0), (0,2), (2,0), ...`` — so the forward direction sits at twice
+    the pair's lexicographic rank and the reverse one just after it.
+    """
+    lo, hi = min(i, j), max(i, j)
+    rank = _context_pairs(n_contexts).index((lo, hi))
+    return 2 * rank + (0 if i < j else 1)
+
+
+def plot_likelihood_construction(
+    batch: EpisodeBatch,
+    episode: int = 0,
+    channel: int = 0,
+    pair: tuple[int, int] | None = None,
+    *,
+    fig: Figure | None = None,
+    palette: Palette = PALETTE,
+    figsize: tuple[float, float] = (16.0, 3.6),
+) -> Figure:
+    """How a rate table is built, in the four steps the generative model takes.
+
+    Reads left to right, and each panel is the input to the next:
+
+    1. **The value profile.** A sinusoid, circularly shifted once per
+       realization. Row ``r`` is the strength profile that realization ``r``
+       responds to, so no two realizations prefer the same interaction strength.
+    2. **Strength selects a realization.** Sweeping the inner product of a key
+       against a query moves a Gaussian bump around the profile, giving a
+       potential over realizations. The two strengths this episode actually drew
+       are marked.
+    3. **This episode's two potentials.** The pair contributes one potential per
+       direction — ``<K_i, Q_j>`` and ``<K_j, Q_i>`` — and they differ, because
+       the inner product is *not* symmetric.
+    4. **The rate table.** Their outer product, squashed. The log-odds are
+       pairwise-decomposable but the probability is not, which is precisely what
+       a factorized observer cannot represent.
+
+    This illustrates the **built-in** likelihood. Passing your own
+    ``likelihood=`` to :class:`~coggrid.World` replaces steps 1-3 wholesale;
+    only the last panel, read from ``batch.rates``, stays meaningful.
+
+    Parameters
+    ----------
+    batch:
+        Any :class:`~coggrid.world.EpisodeBatch`.
+    episode, channel:
+        Which episode and observation channel to illustrate.
+    pair:
+        Which two active variables. Defaults to the first pair involving the
+        goal. Ignored when ``n_contexts == 1``, where a variable interacts with
+        itself.
+    """
+    cfg = batch.cfg
+    goal = int(batch.goal_ind[episode])
+    if pair is None:
+        pairs = display_pairs(cfg.n_contexts, goal, max_pairs=1)
+        pair = pairs[0] if pairs else (0, 0)
+    i, j = pair
+
+    profile = gen.value_profile(cfg)
+    realizations = np.arange(cfg.n_realizations)
+
+    if fig is None:
+        fig = plt.figure(figsize=figsize, layout="constrained")
+    axes = fig.subplots(1, 4)
+
+    # 1 ─ the profile every realization is a shifted copy of
+    axes[0].imshow(profile, aspect="auto", origin="lower", cmap="coolwarm",
+                   extent=(0, cfg.n_roll, -0.5, cfg.n_realizations - 0.5))
+    label_axes(axes[0], xlabel="strength slot", ylabel="realization",
+               title="1. value profile")
+
+    # 2 ─ how a strength maps onto that profile
+    sweep = np.linspace(-1.0, 1.0, 201)
+    potential = gen.realization_potential(sweep, profile, cfg.n_roll)
+    axes[1].imshow(potential.T, aspect="auto", origin="lower", cmap="coolwarm",
+                   extent=(sweep[0], sweep[-1], -0.5, cfg.n_realizations - 0.5))
+    if cfg.n_contexts > 1:
+        for c, direction in ((i, (i, j)), (j, (j, i))):
+            z = batch.interactions[episode, channel,
+                                   _pair_rank(*direction, cfg.n_contexts)]
+            axes[1].axvline(z, color=palette.context(c, goal), lw=2.0, ls="--")
+    label_axes(axes[1], xlabel=r"interaction strength  $\langle K, Q \rangle$",
+               ylabel="realization", title="2. strength picks a realization")
+
+    # 3 ─ the two potentials this episode drew
+    if cfg.n_contexts > 1:
+        for c, direction in ((i, (i, j)), (j, (j, i))):
+            z = batch.interactions[episode, channel,
+                                   _pair_rank(*direction, cfg.n_contexts)]
+            values = gen.realization_potential(np.array(z), profile, cfg.n_roll)
+            role = "goal" if c == goal else "context"
+            axes[2].plot(realizations, values, color=palette.context(c, goal),
+                         marker="o", ms=4, label=f"var {c} ({role})")
+        axes[2].legend(fontsize=8, frameon=False)
+        axes[2].axhline(0.0, color=palette.grid, lw=1.0)
+    label_axes(axes[2], xlabel="realization", ylabel="potential",
+               title="3. one potential per direction")
+    axes[2].grid(alpha=0.25, color=palette.grid)
+
+    # 4 ─ the table an observer actually sees
+    rates = _pair_slice(batch.rates[episode, channel], i, j, cfg.n_contexts)
+    axes[3].imshow(np.atleast_2d(rates).T, origin="lower", cmap="magma",
+                   vmin=0.0, vmax=1.0, aspect="auto")
+    truth = batch.ctx_vals[episode]
+    if cfg.n_contexts > 1:
+        axes[3].add_patch(Rectangle((truth[i] - 0.5, truth[j] - 0.5), 1, 1,
+                                    edgecolor=palette.goal, facecolor="none", lw=2.0))
+    label_axes(axes[3], xlabel=f"var {i}",
+               ylabel=f"var {j}" if cfg.n_contexts > 1 else "",
+               title="4. rate = $\\sigma(v_i \\otimes v_j)$")
+
+    fig.suptitle(
+        f"building P(observation {channel} = 1) — "
+        f"dark 0 to light 1, green marks the truth",
+        fontsize=11,
+    )
+    return fig
+
+
+def plot_evidence_likelihood(
+    batch: EpisodeBatch,
+    episode: int = 0,
+    pair: tuple[int, int] | None = None,
+    *,
+    max_vectors: int = 32,
+    fig: Figure | None = None,
+    palette: Palette = PALETTE,
+    figsize: tuple[float, float] | None = None,
+) -> Figure:
+    """What a *single* observation vector says about the joint realization.
+
+    The top row is the per-channel rate tables — the building blocks. Because
+    key and query embeddings are orthonormalized across channels, each one
+    carves the realization plane differently, and none of them is a shifted copy
+    of another.
+
+    The grid below is the payoff: one panel per possible observation *vector*,
+    showing the posterior a single sample induces from a uniform prior. It is the
+    product of the channel tables, taking each channel's rate where that bit is
+    1 and its complement where the bit is 0 — so ``n_observations`` binary
+    channels generate ``2 ** n_observations`` distinct ways of slicing the plane,
+    most of them far sharper than any channel alone.
+
+    That richness is the reason the task is solvable at all, and the reason
+    factorizing hurts: the informative structure lives in *combinations* of
+    channels evaluated jointly across variables, which is exactly what a
+    per-variable belief cannot hold.
+
+    Each panel is normalized to its own maximum, so the shape is visible rather
+    than the absolute likelihood — which falls off geometrically with the number
+    of channels and would otherwise render every panel uniformly dark.
+
+    Parameters
+    ----------
+    batch:
+        Any :class:`~coggrid.world.EpisodeBatch`.
+    episode:
+        Which episode's rate tables to use.
+    pair:
+        Which two active variables. Defaults to the first pair involving the goal.
+    max_vectors:
+        Cap on the number of observation vectors drawn. With more than this many
+        possible, an evenly spaced subset is shown.
+    """
+    from ..observers import RATE_FLOOR
+
+    cfg = batch.cfg
+    goal = int(batch.goal_ind[episode])
+    if pair is None:
+        pairs = display_pairs(cfg.n_contexts, goal, max_pairs=1)
+        pair = pairs[0] if pairs else (0, 0)
+    i, j = pair
+
+    tables = np.stack([
+        np.atleast_2d(_pair_slice(batch.rates[episode, c], i, j, cfg.n_contexts))
+        for c in range(cfg.n_observations)
+    ])
+    tables = np.clip(tables, RATE_FLOOR, 1.0 - RATE_FLOOR)
+
+    n_possible = 2**cfg.n_observations
+    chosen = (
+        np.arange(n_possible)
+        if n_possible <= max_vectors
+        else np.unique(np.linspace(0, n_possible - 1, max_vectors).astype(int))
+    )
+    bits = ((chosen[:, None] >> np.arange(cfg.n_observations)[None, :]) & 1).astype(float)
+
+    # One normalized likelihood surface per chosen vector.
+    log_like = np.einsum("vo,oxy->vxy", bits, np.log(tables)) + np.einsum(
+        "vo,oxy->vxy", 1.0 - bits, np.log1p(-tables)
+    )
+    surfaces = np.exp(log_like - log_like.max(axis=(1, 2), keepdims=True))
+
+    n_cols = min(8, len(chosen))
+    n_rows = int(np.ceil(len(chosen) / n_cols))
+    if figsize is None:
+        figsize = (1.55 * max(n_cols, cfg.n_observations), 1.75 + 1.55 * n_rows)
+    if fig is None:
+        fig = plt.figure(figsize=figsize, layout="constrained")
+    top, bottom = fig.subfigures(2, 1, height_ratios=[1.25, 1.05 * n_rows])
+
+    truth = batch.ctx_vals[episode]
+
+    def _mark(ax):
+        if cfg.n_contexts > 1:
+            ax.add_patch(Rectangle((truth[i] - 0.5, truth[j] - 0.5), 1, 1,
+                                   edgecolor=palette.goal, facecolor="none", lw=1.4))
+
+    channel_axes = top.subplots(1, cfg.n_observations, squeeze=False)[0]
+    for c, ax in enumerate(channel_axes):
+        ax.imshow(tables[c].T, origin="lower", cmap="magma", vmin=0.0, vmax=1.0)
+        _mark(ax)
+        ax.set_title(f"channel {c}", fontsize=9)
+        ax.set_xticks([]), ax.set_yticks([])
+    top.suptitle(
+        f"per-channel rates  P(o = 1 | var {i}, var {j})  —  dark 0 to light 1",
+        fontsize=10,
+    )
+
+    grid_axes = bottom.subplots(n_rows, n_cols, squeeze=False)
+    for slot, ax in enumerate(grid_axes.ravel()):
+        if slot >= len(chosen):
+            ax.set_visible(False)
+            continue
+        ax.imshow(surfaces[slot].T, origin="lower", cmap="viridis", vmin=0.0, vmax=1.0)
+        _mark(ax)
+        ax.set_title("".join(str(int(b)) for b in bits[slot]), fontsize=8,
+                     family="monospace")
+        ax.set_xticks([]), ax.set_yticks([])
+    shown = "all" if n_possible <= max_vectors else f"{len(chosen)} of {n_possible}"
+    bottom.suptitle(
+        f"posterior from one observation vector ({shown}) — each panel "
+        "normalized to its own peak",
+        fontsize=10,
+    )
     return fig
 
 

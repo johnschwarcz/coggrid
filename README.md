@@ -78,8 +78,8 @@ pushed the belief from optimal.
 The middle panel is the point. Binned by regret, the joint observer's accuracy is
 essentially flat while the naive observer's collapses. Regret is **not** a
 measure of how hard an episode is — a hard episode would hurt both. It is
-specifically a measure of 'naunce': how much *factorizing* costs on that episode. The
-correlation behind each curve is printed in the panel's legend.
+specifically a measure of *nuance*: how much *factorizing* costs on that episode.
+The correlation behind each curve is printed in the panel's legend.
 
 ```python
 from coggrid import factorization_regret, disentanglement
@@ -125,6 +125,106 @@ surface is visibly not the outer product of its own marginals — that mismatch 
 the entire task. Right: the evidence, and both observers converging (or not) on
 the truth.
 
+### How the interaction is built
+
+The rate table is not drawn at random — it is constructed so that the
+*structure* of the interaction is controllable, and so that variables the agent
+has never seen still produce lawful statistics. That construction is the main
+thing worth customizing, so it is worth seeing in full.
+
+<p align="center">
+  <img src="docs/images/likelihood_construction.png" alt="The four steps that turn two variable embeddings into a table of observation rates" width="100%">
+</p>
+
+```python
+from coggrid.viz import plot_likelihood_construction
+
+plot_likelihood_construction(batch, episode=0, channel=0)
+```
+
+Each latent variable carries a **key** and a **query** embedding, one pair per
+observation channel, orthonormalized across channels so that each channel says
+something independent about the same pair of variables.
+
+1. **The value profile.** A sinusoid — `likelihood_freq` periods, scaled by
+   `likelihood_temp` — circularly shifted once per realization. Row `r` is the
+   profile realization `r` responds to, so no two realizations prefer the same
+   interaction strength. The circle has `1 + 2 * n_realizations` slots, longer
+   than the realization axis on purpose, so a strong interaction pushes mass
+   *around* the circle instead of piling it up at the edge.
+2. **Strength selects a realization.** For an ordered pair, the interaction
+   strength is the inner product `z_ij = ⟨K_i, Q_j⟩` — one scalar per channel.
+   It places a Gaussian bump on the circle, and reading that bump against the
+   profile gives a **potential over realizations**, `v_i(r)`.
+3. **Two directions, two potentials.** `⟨K_i, Q_j⟩` and `⟨K_j, Q_i⟩` are
+   different numbers — the inner product is deliberately *asymmetric*, which is
+   what lets a pair produce an anisotropic joint rather than a symmetric one.
+4. **The rate table.** Each pair contributes the outer product
+   `v_i(r_i) · v_j(r_j)` to the logits; the contributions are summed and
+   squashed, giving `P(observation = 1)` for every joint realization.
+
+The consequence is the point of the whole environment. The **log-odds** are
+pairwise-decomposable — there is no three-way term anywhere — but the
+**probability** is not, and neither is the observation distribution. Average
+panel 4 over one variable and much of its structure cancels: on this episode one
+variable's factorized rate is left nearly flat, so a factorized observer has
+almost no signal about it, while the joint observer reads it cleanly. How much
+survives varies by episode, and that variation is exactly what factorization
+regret measures.
+
+### What a single observation actually says
+
+One channel is only part of the story. The agent sees a **vector** of
+`n_observations` bits at once, and its likelihood is the product of the
+per-channel rates — each channel's rate where that bit is 1, its complement
+where the bit is 0.
+
+<p align="center">
+  <img src="docs/images/evidence_likelihood.png" alt="Per-channel rate tables, and the posterior induced by every possible observation vector" width="100%">
+</p>
+
+```python
+from coggrid.viz import plot_evidence_likelihood
+
+plot_evidence_likelihood(batch, episode=0)
+```
+
+The top row is the per-channel tables. Because the key and query embeddings are
+orthonormalized *across* channels, no channel is a shifted copy of another —
+each carves the realization plane its own way.
+
+The grid below is every observation vector the agent could receive, and the
+posterior each one induces from a uniform prior. Five binary channels give 32 of
+them, and they are strikingly varied: corners, bands, diagonal ridges,
+multimodal patches. Most are far sharper than any single channel, because
+agreement between channels concentrates mass where they overlap and cancels it
+elsewhere.
+
+This is why the task is solvable at all — and why factorizing is expensive. The
+information lives in *combinations* of channels evaluated jointly over both
+variables. Collapse the plane to two independent marginals and a large share of
+that structure averages away, taking with it precisely the distinctions between
+these panels.
+
+**The two knobs.** `likelihood_temp` and `likelihood_freq` shape the interaction
+without changing its form:
+
+<p align="center">
+  <img src="docs/images/likelihood_knobs.png" alt="Rate tables across a grid of likelihood_temp and likelihood_freq values" width="70%">
+</p>
+
+Temperature scales the potentials before the sigmoid: low, and every rate sits
+near 0.5 so single observations carry almost nothing; high, and rates saturate
+towards 0/1 so one sample is nearly decisive. Frequency sets how many times the
+profile wraps, which controls how finely the realization axis is partitioned —
+one period gives a single saddle, more gives a checkerboard with many small
+regions where the two variables must be resolved together.
+
+To change the interaction *structurally* rather than parametrically, replace a
+generative stage: `embeddings=` changes step 2 (how variables relate),
+`likelihood=` replaces steps 1–4 outright — adding a genuine three-way term, for
+instance. See [Customizing the generative model](#customizing-the-generative-model).
+
 ### The two baselines
 
 | Observer | Uses | Meaning |
@@ -143,8 +243,9 @@ world.sample_episodes(1000, split="train")      # <=1 novel variable, goal alway
 world.sample_episodes(1000, split="held_out")   # every active variable novel
 ```
 
-`"train"` is a condition where a subset of the variables are never the goal and never co-occur. `"held_out"` is the
-a condition where no variables in the episode have been a goal, nor co-occured, during training.
+`"train"` is the condition under which a subset of the variables are never the
+goal and never co-occur. `"held_out"` is the condition where no variable in the
+episode has been a goal, nor co-occurred, during training.
 
 ---
 

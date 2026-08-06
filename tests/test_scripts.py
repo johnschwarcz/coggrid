@@ -22,9 +22,21 @@ import runpy
 import sys
 from pathlib import Path
 
+import matplotlib.pyplot as plt
 import pytest
 
 ROOT = Path(__file__).resolve().parent.parent
+
+
+@pytest.fixture(autouse=True)
+def _close_figures():
+    """Each script opens several pyplot figures; without this they accumulate.
+
+    Past twenty, matplotlib warns — and the warning lands in whichever test
+    happens to cross the threshold rather than the one that caused it.
+    """
+    yield
+    plt.close("all")
 
 #: What a Jupyter/VS Code kernel actually leaves in ``sys.argv``.
 KERNEL_ARGV = [

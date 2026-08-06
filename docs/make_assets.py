@@ -13,8 +13,46 @@ from __future__ import annotations
 import argparse
 from pathlib import Path
 
+import matplotlib.pyplot as plt
+
 from coggrid import CogGridConfig, World, run_observers
-from coggrid.viz import animate_episode, plot_episode, plot_regret_analysis
+from coggrid.viz import (
+    animate_episode,
+    plot_episode,
+    plot_evidence_likelihood,
+    plot_likelihood_construction,
+    plot_regret_analysis,
+)
+
+#: ``likelihood_temp`` scales the potentials before the sigmoid;
+#: ``likelihood_freq`` sets how many times the value profile wraps. Together they
+#: are the two knobs that shape the interaction without changing its form.
+TEMPS = (0.5, 2.0, 6.0)
+FREQS = (0.5, 1.0, 2.0)
+
+
+def knob_grid(seed: int, figsize=(9.0, 9.0)):
+    """One rate table per (temp, freq), all from the same variables and pair."""
+    fig, axes = plt.subplots(len(TEMPS), len(FREQS), figsize=figsize,
+                             layout="constrained")
+    for row, temp in enumerate(TEMPS):
+        for col, freq in enumerate(FREQS):
+            cfg = CogGridConfig(
+                n_vars=500, n_contexts=2, n_realizations=10,
+                likelihood_temp=temp, likelihood_freq=freq, seed=seed,
+            )
+            batch = World(cfg).sample_episodes(1)
+            ax = axes[row][col]
+            ax.imshow(batch.rates[0, 0], origin="lower", cmap="magma",
+                      vmin=0.0, vmax=1.0)
+            ax.set_xticks([]), ax.set_yticks([])
+            if row == 0:
+                ax.set_title(f"freq = {freq}", fontsize=11)
+            if col == 0:
+                ax.set_ylabel(f"temp = {temp}", fontsize=11)
+    fig.suptitle("what the two likelihood knobs do — dark 0 to light 1",
+                 fontsize=12)
+    return fig
 
 # Resolve the repository root without assuming __file__ exists: VS Code's
 # "run in interactive window" pastes this source into a cell rather than
@@ -41,14 +79,19 @@ if __name__ == "__main__":
     for name, fig in (
         ("episode", plot_episode(batch, traces, episode=0)),
         ("regret_analysis", plot_regret_analysis(batch, traces)),
+        ("likelihood_construction", plot_likelihood_construction(batch, episode=0)),
+        ("evidence_likelihood", plot_evidence_likelihood(batch, episode=0)),
+        ("likelihood_knobs", knob_grid(seed=4)),
     ):
         path = args.out / f"{name}.png"
         fig.savefig(path, dpi=110, bbox_inches="tight")
+        # These are pyplot-managed, so they stay alive until closed.
+        plt.close(fig)
         print("wrote", path, f"({path.stat().st_size / 1e3:.0f} kB)")
 
     # One short episode animates into a much smaller GIF than the default 30.
     anim = CogGridConfig(
-        n_vars=500, n_contexts=2, n_realizations=10, n_steps=30, seed=8)
+        n_vars=500, n_contexts=2, n_realizations=10, n_steps=30, seed=12)
     W = World(anim).sample_episodes(1)
     clip = animate_episode(W, run_observers(W), extended=False, fps=6)
     path = clip.save(args.out / "episode_animation")
