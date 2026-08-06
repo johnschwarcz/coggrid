@@ -30,9 +30,10 @@ well can you decode from exactly ``n_steps`` samples of evidence" — so there i
 no value left to bootstrap from.
 
 Because the generative model is cheap in batch and expensive one episode at a
-time, :class:`CogGridEnv` samples a buffer of episodes and serves
-them one by one. Use :class:`CogGridVectorEnv` when you want the
-batch directly.
+time, :class:`CogGridEnv` samples a buffer of episodes and serves them one by
+one. If you want the batch directly, call
+:meth:`~coggrid.World.sample_episodes` — that is the vectorized path, and no
+environment wrapper is needed for it.
 """
 
 from __future__ import annotations
@@ -47,7 +48,7 @@ from .config import CogGridConfig
 from .generative import Split
 from .world import EpisodeBatch, World
 
-__all__ = ["CogGridEnv", "CogGridVectorEnv", "register"]
+__all__ = ["CogGridEnv", "register"]
 
 RewardMode = Literal["dense", "terminal"]
 
@@ -267,138 +268,6 @@ class CogGridEnv(Env):
         Handy for running an ideal observer on exactly the episode the agent saw.
         """
         return self._episode
-
-
-class CogGridVectorEnv(Env):
-    """Batched environment: ``n_envs`` synchronized episodes.
-
-    Same semantics as :class:`CogGridEnv`, but every array carries a
-    leading ``n_envs`` axis and all sub-episodes reset together. Since the
-    horizon is fixed and identical across episodes, autoreset is unnecessary and
-    the whole batch simply terminates at once.
-
-    This is the interface that matches how the environment is actually cheap to
-    run: the joint likelihood is one vectorized einsum over the batch.
-
-    Examples
-    --------
-    >>> venv = CogGridVectorEnv(n_envs=64, seed=0)
-    >>> obs, info = venv.reset()
-    >>> obs["observation"].shape
-    (64, 5)
-    >>> actions = np.zeros(64, dtype=int)
-    >>> obs, rewards, terminated, truncated, info = venv.step(actions)
-    >>> rewards.shape
-    (64,)
-    """
-
-    def __init__(
-        self,
-        n_envs: int = 64,
-        config: CogGridConfig | None = None,
-        *,
-        world: World | None = None,
-        split: Split = "held_out",
-        reward_mode: RewardMode = "dense",
-        seed: int | None = None,
-    ) -> None:
-        if n_envs < 1:
-            raise ValueError(f"n_envs must be >= 1, got {n_envs}")
-        if world is None:
-            cfg = config if config is not None else CogGridConfig()
-            if seed is not None:
-                cfg = cfg.replace(seed=seed)
-            world = World(cfg)
-
-        self.world = world
-        self.cfg = world.cfg
-        self.n_envs = int(n_envs)
-        self.split: Split = split
-        self.reward_mode: RewardMode = reward_mode
-
-        self.single_observation_space = _observation_space(self.cfg)
-        self.single_action_space = Discrete(self.cfg.n_realizations)
-        self.observation_space = self.single_observation_space
-        self.action_space = self.single_action_space
-
-        self._stream = np.random.default_rng(
-            self.cfg.seed if seed is None else seed
-        )
-        self._batch: EpisodeBatch | None = None
-        self._t = 0
-
-    def reset(
-        self,
-        *,
-        seed: int | None = None,
-        options: dict[str, Any] | None = None,
-    ) -> tuple[dict[str, Any], dict[str, Any]]:
-        """Draw ``n_envs`` fresh episodes."""
-        if seed is not None:
-            self._stream = np.random.default_rng(seed)
-        if options and options.get("split") is not None:
-            self.split = options["split"]
-
-        self._batch = self.world.sample_episodes(
-            self.n_envs, split=self.split, rng=self._stream
-        )
-        self._t = 0
-        return self._observe(), self._info()
-
-    def step(
-        self, actions: np.ndarray
-    ) -> tuple[dict[str, Any], np.ndarray, np.ndarray, np.ndarray, dict[str, Any]]:
-        """Submit one guess per sub-episode."""
-        if self._batch is None:
-            raise RuntimeError("call reset() before step()")
-
-        actions = np.asarray(actions).reshape(-1)
-        if actions.size != self.n_envs:
-            raise ValueError(
-                f"expected {self.n_envs} actions, got {actions.size}"
-            )
-        if ((actions < 0) | (actions >= self.cfg.n_realizations)).any():
-            raise ValueError(
-                f"actions outside Discrete({self.cfg.n_realizations})"
-            )
-
-        correct = actions == self._batch.goal_value
-        self._t += 1
-        done = self._t >= self.cfg.n_steps
-
-        if self.reward_mode == "dense":
-            rewards = correct.astype(float)
-        else:
-            rewards = correct.astype(float) if done else np.zeros(self.n_envs)
-
-        terminated = np.full(self.n_envs, done)
-        truncated = np.zeros(self.n_envs, dtype=bool)
-        info = self._info()
-        info["correct"] = correct
-        return self._observe(), rewards, terminated, truncated, info
-
-    def _observe(self) -> dict[str, Any]:
-        assert self._batch is not None
-        t = min(self._t, self.cfg.n_steps - 1)
-        return {
-            "observation": self._batch.observations[:, t].astype(np.int8),
-            "active_vars": self._batch.ctx_inds.astype(np.int64),
-            "goal_context": self._batch.goal_ind.astype(np.int64),
-        }
-
-    def _info(self) -> dict[str, Any]:
-        assert self._batch is not None
-        return {
-            "step": self._t,
-            "split": self.split,
-            "goal_value": self._batch.goal_value.copy(),
-            "context_values": self._batch.ctx_vals.copy(),
-        }
-
-    @property
-    def batch(self) -> EpisodeBatch | None:
-        """The current batch, for running ideal observers on the same episodes."""
-        return self._batch
 
 
 def register() -> None:

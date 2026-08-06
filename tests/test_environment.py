@@ -14,7 +14,6 @@ import pytest
 from coggrid import (
     CogGridConfig,
     CogGridEnv,
-    CogGridVectorEnv,
     World,
     disentanglement,
     factorization_regret,
@@ -390,22 +389,6 @@ class TestGymEnv:
         b = CogGridEnv(SMALL).reset(seed=5)[0]
         assert np.array_equal(a["observation"], b["observation"])
         assert np.array_equal(a["active_vars"], b["active_vars"])
-
-    def test_vector_env_shapes(self):
-        venv = CogGridVectorEnv(n_envs=16, config=SMALL, seed=0)
-        obs, _ = venv.reset()
-        assert obs["observation"].shape == (16, SMALL.n_observations)
-        assert obs["active_vars"].shape == (16, SMALL.n_contexts)
-        _, rewards, terminated, truncated, _ = venv.step(np.zeros(16, dtype=int))
-        assert rewards.shape == (16,)
-        assert not terminated.any() and not truncated.any()
-
-    def test_vector_env_terminates_together(self):
-        venv = CogGridVectorEnv(n_envs=8, config=SMALL, seed=0)
-        venv.reset()
-        for _ in range(SMALL.n_steps):
-            _, _, terminated, _, _ = venv.step(np.zeros(8, dtype=int))
-        assert terminated.all()
 
     def test_env_episode_is_scoreable(self):
         """The episode an agent saw can be handed straight to an observer."""

@@ -34,7 +34,7 @@ Layout
 from __future__ import annotations
 
 from .config import CogGridConfig
-from .env import CogGridEnv, CogGridVectorEnv
+from .env import CogGridEnv
 from .observers import (
     BeliefTrace,
     disentanglement,
@@ -64,7 +64,6 @@ __all__ = [
     "World",
     "EpisodeBatch",
     "CogGridEnv",
-    "CogGridVectorEnv",
     # observers
     "BeliefTrace",
     "joint_observer",

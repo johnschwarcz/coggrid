@@ -28,7 +28,6 @@ import matplotlib.pyplot as plt  # noqa: E402
 from coggrid import (  # noqa: E402
     CogGridConfig,
     CogGridEnv,
-    CogGridVectorEnv,
     World,
 )
 
@@ -58,11 +57,10 @@ SKETCHES = ("def codebook_embeddings",)
 #: Shrink the worked example so the suite stays quick. Anything here must keep
 #: the block's *meaning*: only sizes change, never the API being demonstrated.
 SHRINK = {
+    "sample_episodes(4096)": "sample_episodes(20)",
     "sample_episodes(2000)": "sample_episodes(40)",
     "sample_episodes(1000,": "sample_episodes(20,",
-    "n_envs=256": "n_envs=8",
     "n_vars=500": "n_vars=60",
-    "n_envs=64": "n_envs=8",
 }
 
 
@@ -156,13 +154,10 @@ def test_environment_table_matches_the_constructors():
     documented = _table_rows("| Argument | Default | Meaning |")
     if not documented:
         pytest.skip("README has no environment table")
-    signatures = {
-        "CogGridEnv": inspect.signature(CogGridEnv.__init__).parameters,
-        "CogGridVectorEnv": inspect.signature(CogGridVectorEnv.__init__).parameters,
-    }
+    signatures = {"CogGridEnv": inspect.signature(CogGridEnv.__init__).parameters}
     for name, shown in documented.items():
         homes = [cls for cls, sig in signatures.items() if name in sig]
-        assert homes, f"README documents {name!r}, which no environment accepts"
+        assert homes, f"README documents {name!r}, which CogGridEnv does not accept"
         for cls in homes:
             default = signatures[cls][name].default
             if default is inspect.Parameter.empty:
@@ -176,7 +171,7 @@ def test_no_environment_argument_is_left_undocumented():
     documented = set(_table_rows("| Argument | Default | Meaning |"))
     if not documented:
         pytest.skip("README has no environment table")
-    for cls in (CogGridEnv, CogGridVectorEnv):
+    for cls in (CogGridEnv,):
         params = set(inspect.signature(cls.__init__).parameters) - {"self"}
         assert params <= documented, (
             f"{cls.__name__} accepts undocumented arguments: "
@@ -187,27 +182,6 @@ def test_no_environment_argument_is_left_undocumented():
 # --------------------------------------------------------------------------- #
 # specific claims the prose makes
 # --------------------------------------------------------------------------- #
-def test_n_envs_is_the_number_of_parallel_episodes():
-    """The README says every array gains a leading ``n_envs`` axis."""
-    venv = CogGridVectorEnv(n_envs=7, config=CogGridConfig(n_vars=60, seed=0))
-    obs, _ = venv.reset()
-    assert obs["observation"].shape[0] == 7
-    assert obs["active_vars"].shape[0] == 7
-
-
-def test_n_envs_overrides_the_configs_batch_size():
-    """``n_envs`` decides the batch, not ``CogGridConfig.n_episodes``.
-
-    The two name the same quantity from different places, and the README says so
-    explicitly; a reader who set ``n_episodes`` and expected it to apply would
-    otherwise be silently wrong.
-    """
-    cfg = CogGridConfig(n_vars=60, n_episodes=999, seed=0)
-    venv = CogGridVectorEnv(n_envs=5, config=cfg)
-    obs, _ = venv.reset()
-    assert obs["observation"].shape[0] == 5
-
-
 def test_world_argument_overrides_config():
     world = World(CogGridConfig(n_vars=60, seed=1))
     env = CogGridEnv(CogGridConfig(n_vars=444), world=world)

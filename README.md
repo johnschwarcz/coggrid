@@ -259,24 +259,9 @@ Episodes end with `terminated=True`, not `truncated=True`: the horizon *is* the
 task ("decode from exactly `n_steps` samples"), not an externally imposed limit,
 so there is no value left to bootstrap.
 
-```python
-from coggrid import CogGridVectorEnv
-venv = CogGridVectorEnv(n_envs=256, seed=0)
-```
+`coggrid.env.register()` adds `CogGrid-v0` to the Gymnasium registry.
 
-`n_envs` is how many episodes run **side by side**. Every array gains a leading
-`n_envs` axis and all sub-episodes reset together — because the horizon is fixed
-and identical across episodes, they always finish at once, so there is no
-autoreset to reason about. This is the interface that matches how the environment
-is actually cheap to run: the joint likelihood is one vectorized einsum over the
-batch. `coggrid.env.register()` adds `CogGrid-v0` to the Gymnasium registry.
-
-> `n_envs` and `CogGridConfig.n_episodes` name the same quantity from two
-> places. The vector environment draws `n_envs` episodes per reset and **ignores
-> `n_episodes`**, which only supplies the default for a direct
-> `world.sample_episodes()` call.
-
-Both environments take the same keyword arguments:
+`CogGridEnv` takes:
 
 | Argument | Default | Meaning |
 | --- | --- | --- |
@@ -284,11 +269,23 @@ Both environments take the same keyword arguments:
 | `world` | `None` | Draw from an existing `World` instead of building one, so several environments share embeddings and therefore the same split. Overrides `config`. |
 | `split` | `"held_out"` | Which variable pool episodes come from — see below. |
 | `reward_mode` | `"dense"` | `"dense"` scores every step, `"terminal"` only the last. |
+| `buffer_size` | 256 | Episodes generated per internal refill. Sampling in blocks is much cheaper than one at a time; larger uses more memory. |
+| `expose_likelihood` | `False` | Put the joint and marginal rate tables in `info` — what an ideal-observer baseline needs, and what a learning agent must not see. |
+| `render_mode` | `None` | `"ansi"` makes `render()` return a text summary of the current step. |
 | `seed` | `None` | Seeds the world's embeddings and the episode stream. `None` means fresh episodes each run. |
-| `n_envs` | 64 | Vector env only: episodes run side by side. |
-| `buffer_size` | 256 | Single env only: episodes generated per internal refill. Sampling in blocks is much cheaper than one at a time; larger uses more memory. |
-| `expose_likelihood` | `False` | Single env only: put the joint and marginal rate tables in `info`. That is what an ideal-observer baseline needs — and exactly what a learning agent must not see, which is why it is off by default. |
-| `render_mode` | `None` | Single env only: `"ansi"` makes `render()` return a text summary of the current step. |
+
+### Batched rollouts
+
+There is no vector environment. Batching is what `World` already does:
+
+```python
+rollout = world.sample_episodes(4096)      # every episode at once
+rollout.observations                       # (4096, n_steps, n_observations)
+```
+
+`sample_episodes` builds the whole batch with one vectorized einsum over the
+joint likelihood, which is the cheap path. A gym wrapper around it would only add
+a step-by-step interface on top of data that is already complete.
 
 ---
 
