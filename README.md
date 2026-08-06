@@ -22,7 +22,7 @@ the latent space as independent factors is therefore provably lossy.
 
 <p align="center"><em>
 One episode, as evidence accumulates. Top: the optimal observer's posterior, the
-posterior a factorized observer stands behind, and where they disagree. Bottom:
+posterior of a factorized observer stands behind, and where they disagree. Bottom:
 the evidence stream.
 </em></p>
 
