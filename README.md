@@ -65,7 +65,7 @@ pytest
 
 ---
 
-## The headline result
+## Contrasting Optimal and Naive Bayes
 
 <p align="center">
   <img src="docs/images/regret_analysis.png" alt="Factorization regret predicts the naive observer's failures but not the joint observer's" width="100%">
