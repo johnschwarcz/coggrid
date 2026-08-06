@@ -139,24 +139,33 @@ never changes.
 ```python
 from coggrid.viz import plot_interaction_phases
 
-plot_interaction_phases(world, batch, episode=0, channel=0)
+plot_interaction_phases(world, batch, channels=(0, 1))
 ```
 
-Each latent variable carries a **key** and a **query** embedding, one pair per
-observation channel (panels 1–2). Rows are unit vectors, orthogonalized across
-channels, so one pair of variables hands every channel an independent phase.
+One row per observation channel, reading left to right:
 
-The interaction strength is the inner product `z_ij = ⟨K_i, Q_j⟩` — one scalar
-per channel, per direction (panel 3). `⟨K_i, Q_j⟩` and `⟨K_j, Q_i⟩` are
-deliberately different, which is what stops the joint from being symmetric.
+1. **Embeddings.** Each latent variable carries a **key** and a **query** vector
+   per channel. Both are unit vectors, so the cosine of the angle between one
+   variable's key and the other's query *is* the interaction strength `z`. Both
+   directions are drawn — `⟨K_i, Q_j⟩` and `⟨K_j, Q_i⟩` — and they differ, which
+   is what stops the joint from being symmetric. The arrows are drawn in the
+   plane the two vectors actually span, so the angle you see is the real one, not
+   a projection.
+2. **Phase.** The potential over realizations is a single sinusoid shifted by
+   `−2π · likelihood_freq · z`. Both variables read the *same* waveform; their
+   strengths only say where to start.
+3. **The standard pattern**, over a full turn in both variables, with the window
+   this channel selects.
+4. **The rate table** that window yields.
 
-Each strength becomes a phase. The potential over realizations is a single
-sinusoid shifted by `−2π · likelihood_freq · z`, so both variables read the
-*same* waveform from different starting points (panel 4). Their outer product,
-squashed, is the rate table — and it is a window onto a fixed two-dimensional
-pattern, positioned by the two phases (panels 5–6). This is exact: reconstructing
-any episode's table from the standard pattern and its two strengths agrees with
-`batch.rates` to floating-point precision.
+Comparing the rows is the point: same waveform, same pattern, different angles,
+different window, different table. Embeddings are orthogonalized across channels,
+so each channel gets an independent phase from the same pair of variables — two
+rows is enough to show they do not move together.
+
+This is exact, not a schematic. Reconstructing any episode's rate table from the
+standard pattern and its two interaction strengths agrees with `batch.rates` to
+floating-point precision, and a test asserts it.
 
 Two things follow. First, **novel variables are not special** — an unseen
 variable is just another phase, so the statistics it produces are lawful even

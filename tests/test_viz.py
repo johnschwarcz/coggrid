@@ -179,12 +179,47 @@ class TestStaticFigures:
         assert len(summary_figure(batch, traces)) == 4
 
     @pytest.mark.parametrize("n_contexts", [2, 3, 4])
-    def test_interaction_phases_draws_six_panels(self, n_contexts):
+    def test_interaction_phases_draws_a_row_per_channel(self, n_contexts):
         from coggrid.viz import plot_interaction_phases
 
         world = World(SMALL.replace(n_contexts=n_contexts))
-        fig = plot_interaction_phases(world, world.sample_episodes(4), episode=0)
-        assert len(fig.axes) == 6
+        batch = world.sample_episodes(4)
+        for channels in ((0, 1), (0, 1, 2), (2,)):
+            fig = plot_interaction_phases(world, batch, episode=0, channels=channels)
+            assert len(fig.axes) == 4 * len(channels)
+
+    def test_interaction_phases_rejects_a_missing_channel(self):
+        from coggrid.viz import plot_interaction_phases
+
+        world = World(SMALL.replace(n_contexts=2))
+        with pytest.raises(ValueError, match="channels must lie in"):
+            plot_interaction_phases(
+                world, world.sample_episodes(2), channels=(0, SMALL.n_observations)
+            )
+
+    def test_interaction_phases_angle_is_the_interaction_strength(self):
+        """The drawn angle must be ``arccos(z)`` for the strength the env used.
+
+        Embeddings are unit vectors, so the cosine of the angle between a key and
+        a query *is* the interaction strength — the panel would be decorative
+        rather than informative if these came apart.
+        """
+        from coggrid.viz import plot_interaction_phases
+
+        world = World(SMALL.replace(n_contexts=2))
+        batch = world.sample_episodes(4)
+        plot_interaction_phases(world, batch, episode=0, channels=(0,))
+
+        i, j = 0, 1
+        for a, b in ((i, j), (j, i)):
+            var_a = int(batch.ctx_inds[0, a])
+            var_b = int(batch.ctx_inds[0, b])
+            cosine = world.keys[var_a, 0] @ world.queries[var_b, 0]
+            from coggrid.viz.plots import _pair_rank
+
+            stored = batch.interactions[0, 0, _pair_rank(a, b, 2)]
+            assert cosine == pytest.approx(stored, abs=1e-12)
+            assert abs(cosine) <= 1.0
 
     def test_interaction_phases_needs_a_pair(self):
         """A single variable has no partner to take a phase against."""
@@ -204,8 +239,8 @@ class TestStaticFigures:
 
         world = World(SMALL.replace(n_contexts=2))
         batch = world.sample_episodes(4)
-        fig = plot_interaction_phases(world, batch, episode=0, channel=0)
-        drawn = np.asarray(fig.axes[5].get_images()[0].get_array())
+        fig = plot_interaction_phases(world, batch, episode=0, channels=(0,))
+        drawn = np.asarray(fig.axes[3].get_images()[0].get_array())
         # Compared as multisets: which variable lands on which axis depends on
         # where the goal fell, and that is not what this test is about.
         assert np.allclose(np.sort(drawn, axis=None),

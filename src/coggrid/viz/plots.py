@@ -717,52 +717,85 @@ def _wave_at(cfg, waveform: np.ndarray, position: np.ndarray) -> np.ndarray:
                      period=1.0)
 
 
+def _standard_waveform(cfg, n_samples: int = 2001) -> np.ndarray:
+    """The one potential waveform every variable is a phase-shifted copy of.
+
+    Recovered by reading realization 0 as the interaction strength sweeps a full
+    turn, which is the same thing as evaluating the waveform at every phase.
+    """
+    turn = np.linspace(0.0, 1.0, n_samples)[:-1]
+    return gen.realization_potential(turn, gen.value_profile(cfg), cfg.n_roll)[:, 0]
+
+
+def _wave_at(cfg, waveform: np.ndarray, position: np.ndarray) -> np.ndarray:
+    """Evaluate the standard waveform at a continuous circular ``position``."""
+    turn = np.linspace(0.0, 1.0, waveform.size + 1)[:-1]
+    return np.interp(np.mod(position, cfg.n_roll) / cfg.n_roll, turn, waveform,
+                     period=1.0)
+
+
+def _draw_angle(ax, cosine: float, baseline: float, colour: str,
+                tips: tuple[str, str]) -> None:
+    """Draw one key/query pair as arrows on a unit circle, ``cosine`` apart.
+
+    The two vectors span a plane, and they are drawn *in that plane*, so the
+    angle between the arrows is the true angle in the full embedding space — not
+    a projection of it. Only the absolute orientation is arbitrary, which is why
+    each pair gets its own ``baseline``.
+    """
+    theta = np.arccos(np.clip(cosine, -1.0, 1.0))
+    arrows = ((baseline, "-", tips[0]), (baseline + theta, "--", tips[1]))
+    for angle, style, tip in arrows:
+        ax.annotate("", xy=(np.cos(angle), np.sin(angle)), xytext=(0, 0),
+                    arrowprops=dict(arrowstyle="-|>", color=colour, lw=2.0,
+                                    linestyle=style, shrinkA=0, shrinkB=0))
+        ax.text(1.16 * np.cos(angle), 1.16 * np.sin(angle), tip, color=colour,
+                ha="center", va="center", fontsize=10, weight="bold")
+    arc = np.linspace(baseline, baseline + theta, 60)
+    ax.plot(0.42 * np.cos(arc), 0.42 * np.sin(arc), color=colour, lw=1.2)
+    mid = baseline + theta / 2
+    ax.text(0.62 * np.cos(mid), 0.62 * np.sin(mid), f"{cosine:+.2f}", color=colour,
+            ha="center", va="center", fontsize=9)
+
+
 def plot_interaction_phases(
     world: Any,
     batch: EpisodeBatch,
     episode: int = 0,
-    channel: int = 0,
+    channels: Sequence[int] = (0, 1),
     pair: tuple[int, int] | None = None,
     *,
     fig: Figure | None = None,
     palette: Palette = PALETTE,
-    figsize: tuple[float, float] = (14.0, 8.0),
+    figsize: tuple[float, float] | None = None,
 ) -> Figure:
-    """Interactions as **phase shifts of one standard joint likelihood**.
+    """Interactions as **phase shifts of one standard likelihood**.
 
-    Every rate table in the environment is the *same* pattern. What a pair of
-    latent variables does is choose which part of it you see: the inner product
-    of one variable's key with the other's query sets a phase, and the phase
-    translates the pattern. Nothing about the shape changes.
+    Every rate table in the environment is the *same* pattern. A pair of latent
+    variables only chooses which part of it you see: the angle between one
+    variable's key and the other's query sets a phase, and the phase translates
+    the pattern. The shape never changes.
 
-    Concretely, the potential over realizations is a single sinusoid whose phase
-    is ``-2 * pi * likelihood_freq * z`` for interaction strength ``z``, so the
-    rate table is that fixed two-dimensional pattern sampled through a window
-    whose position the two strengths pick out. This holds to within floating
-    point for every episode and channel — the last panel and the boxed window in
-    the fifth are the same numbers.
+    One row per observation channel, and each row reads left to right:
 
-    Reading it, top row then bottom:
+    1. **Embeddings.** The key and query whose angle matters, drawn on a unit
+       circle. The cosine of that angle *is* the interaction strength, because
+       the embeddings are unit vectors. Both directions appear —
+       ``<K_i, Q_j>`` and ``<K_j, Q_i>`` — and they differ, which is what stops
+       the joint from being symmetric.
+    2. **Phase.** One waveform, read from two starting points. Both variables
+       sample the same curve; their strengths only say where to start.
+    3. **The standard pattern**, over a full turn in both variables, with the
+       window this channel selects.
+    4. **The rate table** that window yields.
 
-    1-2. The **key** and **query** embeddings of the two active variables, one
-    row per observation channel. Rows are unit vectors and are orthogonalized
-    across channels, so each channel gets an independent phase from the same
-    pair of variables.
-
-    3. Their inner products — one strength per channel and per direction.
-    ``<K_i, Q_j>`` and ``<K_j, Q_i>`` differ, which is what stops the joint from
-    being symmetric.
-
-    4. The standard waveform, with the two windows those strengths select. The
-    sampled potentials are the same curve read from different starting phases.
-
-    5. The standard joint pattern over a full turn in both variables, with this
-    episode's window boxed.
-
-    6. That window, on the realization grid — the rate table an observer sees.
+    Comparing the rows is the point: same pattern, different angles, different
+    window, different table. Two channels are drawn rather than all of them
+    because the channels are constructed to be independent, so two is enough to
+    show they do not move together.
 
     This describes the **built-in** likelihood. Passing your own ``likelihood=``
-    to :class:`~coggrid.World` replaces the mechanism, and only the last panel
+    to :class:`~coggrid.World` replaces the mechanism, and only the last column
     stays meaningful.
 
     Parameters
@@ -772,11 +805,12 @@ def plot_interaction_phases(
         embeddings live there rather than on the batch.
     batch:
         A batch drawn from ``world``.
-    episode, channel:
-        Which episode and observation channel to illustrate.
+    episode:
+        Which episode to illustrate.
+    channels:
+        Which observation channels to show, one row each.
     pair:
-        Which two active variables. Defaults to the first pair involving the
-        goal.
+        Which two active variables. Defaults to the first pair involving the goal.
     """
     cfg = batch.cfg
     if cfg.n_contexts < 2:
@@ -784,92 +818,99 @@ def plot_interaction_phases(
             "phase modulation needs two active variables to interact; "
             "n_contexts=1 has a single self-interaction and no pair to show"
         )
+    channels = [int(c) for c in channels]
+    if any(not 0 <= c < cfg.n_observations for c in channels):
+        raise ValueError(
+            f"channels must lie in [0, {cfg.n_observations}), got {channels}"
+        )
+
     goal = int(batch.goal_ind[episode])
     if pair is None:
         pair = display_pairs(cfg.n_contexts, goal, max_pairs=1)[0]
     i, j = pair
     var_i, var_j = (int(batch.ctx_inds[episode, c]) for c in (i, j))
+    colour_i, colour_j = palette.context(i, goal), palette.context(j, goal)
 
-    z_ij = batch.interactions[episode, :, _pair_rank(i, j, cfg.n_contexts)]
-    z_ji = batch.interactions[episode, :, _pair_rank(j, i, cfg.n_contexts)]
     n_roll, n_r = cfg.n_roll, cfg.n_realizations
     waveform = _standard_waveform(cfg)
     realizations = np.arange(n_r)
+    truth = batch.ctx_vals[episode]
 
+    if figsize is None:
+        figsize = (15.0, 3.7 * len(channels))
     if fig is None:
         fig = plt.figure(figsize=figsize, layout="constrained")
-    axes = fig.subplots(2, 3)
+    axes = fig.subplots(len(channels), 4, squeeze=False)
 
-    # ── 1-2: the embeddings themselves
-    for ax, matrix, name, var, colour in (
-        (axes[0][0], world.keys[var_i], f"keys  $K$  of var {i}", var_i,
-         palette.context(i, goal)),
-        (axes[0][1], world.queries[var_j], f"queries  $Q$  of var {j}", var_j,
-         palette.context(j, goal)),
-    ):
-        limit = np.abs(matrix).max()
-        ax.imshow(matrix, aspect="auto", cmap="RdBu_r", vmin=-limit, vmax=limit)
-        ax.set_title(f"{name}  (idx {var})", fontsize=10, color=colour)
-        ax.set_xlabel("embedding dimension")
-        ax.set_ylabel("channel")
-        ax.set_yticks(range(cfg.n_observations))
+    # The standard pattern is the same in every row; that is the whole claim.
+    fine = np.arange(n_roll * 4) / 4.0
+    pattern = gen.sigmoid(np.outer(_wave_at(cfg, waveform, fine),
+                                   _wave_at(cfg, waveform, fine)))
 
-    # ── 3: the inner products, one per channel and direction
-    ax = axes[0][2]
-    width = 0.38
-    channels = np.arange(cfg.n_observations)
-    ax.bar(channels - width / 2, z_ij, width, color=palette.context(i, goal),
-           label=r"$\langle K_i, Q_j \rangle$")
-    ax.bar(channels + width / 2, z_ji, width, color=palette.context(j, goal),
-           label=r"$\langle K_j, Q_i \rangle$")
-    ax.axhline(0.0, color="k", lw=1.0)
-    ax.axvline(channel - 0.5, color=palette.grid, lw=0)
-    ax.set_xticks(channels)
-    label_axes(ax, xlabel="channel", ylabel="interaction strength  $z$",
-               title="inner products set the phase")
-    ax.legend(fontsize=9, frameon=False)
+    for row, channel in enumerate(channels):
+        # ── 1: the embeddings, and the angle between them
+        # Read from the batch rather than recomputed, so the panel cannot drift
+        # from the strengths the environment actually used.
+        z_ij = float(batch.interactions[episode, channel,
+                                        _pair_rank(i, j, cfg.n_contexts)])
+        z_ji = float(batch.interactions[episode, channel,
+                                        _pair_rank(j, i, cfg.n_contexts)])
 
-    # ── 4: one waveform, two starting phases
-    ax = axes[1][0]
-    turn = np.arange(n_roll * 8) / 8.0
-    ax.plot(turn, _wave_at(cfg, waveform, turn), color="0.35", lw=1.4,
-            label="standard waveform")
-    for c, z, marker in ((i, z_ij[channel], "o"), (j, z_ji[channel], "s")):
-        positions = z * n_roll - realizations
-        ax.plot(np.mod(positions, n_roll), _wave_at(cfg, waveform, positions),
-                marker, ms=6, color=palette.context(c, goal),
-                label=f"var {c}  ($z$ = {z:+.2f})")
-    label_axes(ax, xlabel="phase (slots around the circle)", ylabel="potential",
-               title=f"4. one waveform, two phases (channel {channel})")
-    ax.legend(fontsize=8, frameon=False)
-    ax.grid(alpha=0.25, color=palette.grid)
+        ax = axes[row][0]
+        circle = np.linspace(0, 2 * np.pi, 200)
+        ax.plot(np.cos(circle), np.sin(circle), color=palette.grid, lw=1.0, ls=":")
+        _draw_angle(ax, z_ij, np.pi / 2, colour_i, (f"$K_{i}$", f"$Q_{j}$"))
+        _draw_angle(ax, z_ji, -np.pi / 2, colour_j, (f"$K_{j}$", f"$Q_{i}$"))
+        ax.set_xlim(-1.5, 1.5), ax.set_ylim(-1.5, 1.5)
+        ax.set_aspect("equal"), ax.set_xticks([]), ax.set_yticks([])
+        for spine in ax.spines.values():
+            spine.set_visible(False)
+        ax.set_title(f"channel {channel}: embeddings", fontsize=10)
+        ax.set_xlabel(r"$z = \cos\theta$  (embeddings are unit vectors)",
+                      fontsize=8, color="0.4")
 
-    # ── 5: the standard pattern, and the window this episode selects
-    ax = axes[1][1]
-    axis = np.arange(n_roll * 4) / 4.0
-    pattern = gen.sigmoid(np.outer(_wave_at(cfg, waveform, axis),
-                                   _wave_at(cfg, waveform, axis)))
-    ax.imshow(pattern.T, origin="lower", cmap="magma", vmin=0.0, vmax=1.0,
-              extent=(0, n_roll, 0, n_roll))
-    ax.plot(np.mod(z_ij[channel] * n_roll - realizations, n_roll)[:, None].repeat(n_r, 1),
-            np.mod(z_ji[channel] * n_roll - realizations, n_roll)[None, :].repeat(n_r, 0),
-            ".", color=palette.goal, ms=3.5)
-    label_axes(ax, xlabel=f"phase of var {i}", ylabel=f"phase of var {j}",
-               title="5. the standard joint pattern")
+        # ── 2: one waveform, two starting phases
+        ax = axes[row][1]
+        turn = np.arange(n_roll * 8) / 8.0
+        ax.plot(turn, _wave_at(cfg, waveform, turn), color="0.4", lw=1.4,
+                label="standard waveform")
+        for c, z, colour, marker in ((i, z_ij, colour_i, "o"),
+                                     (j, z_ji, colour_j, "s")):
+            pos = z * n_roll - realizations
+            ax.plot(np.mod(pos, n_roll), _wave_at(cfg, waveform, pos), marker,
+                    ms=6, color=colour, label=f"var {c}")
+        ax.set_title("one waveform, two phases", fontsize=10)
+        ax.set_xlabel("phase (slots)", fontsize=9)
+        ax.set_ylabel("potential", fontsize=9)
+        ax.grid(alpha=0.25, color=palette.grid)
+        if row == 0:
+            ax.legend(fontsize=8, frameon=False, loc="lower right")
 
-    # ── 6: what the observer actually gets
-    ax = axes[1][2]
-    table = _pair_slice(batch.rates[episode, channel], i, j, cfg.n_contexts)
-    ax.imshow(table.T, origin="lower", cmap="magma", vmin=0.0, vmax=1.0)
-    truth = batch.ctx_vals[episode]
-    ax.add_patch(Rectangle((truth[i] - 0.5, truth[j] - 0.5), 1, 1,
-                           edgecolor=palette.goal, facecolor="none", lw=2.0))
-    label_axes(ax, xlabel=f"var {i} realization", ylabel=f"var {j} realization",
-               title="6. the rate table")
+        # ── 3: which window of the standard pattern this channel picks
+        ax = axes[row][2]
+        ax.imshow(pattern.T, origin="lower", cmap="magma", vmin=0.0, vmax=1.0,
+                  extent=(0, n_roll, 0, n_roll))
+        window_i = np.mod(z_ij * n_roll - realizations, n_roll)
+        window_j = np.mod(z_ji * n_roll - realizations, n_roll)
+        ax.plot(np.repeat(window_i, n_r), np.tile(window_j, n_r), ".",
+                color=palette.goal, ms=3.0)
+        ax.set_title("the standard pattern", fontsize=10)
+        ax.set_xlabel(f"phase of var {i}", fontsize=9)
+        ax.set_ylabel(f"phase of var {j}", fontsize=9)
+
+        # ── 4: the rate table an observer sees
+        ax = axes[row][3]
+        table = _pair_slice(batch.rates[episode, channel], i, j, cfg.n_contexts)
+        ax.imshow(table.T, origin="lower", cmap="magma", vmin=0.0, vmax=1.0)
+        ax.add_patch(Rectangle((truth[i] - 0.5, truth[j] - 0.5), 1, 1,
+                               edgecolor=palette.goal, facecolor="none", lw=2.0))
+        ax.set_title("the rate table", fontsize=10)
+        ax.set_xlabel(f"var {i} realization", fontsize=9)
+        ax.set_ylabel(f"var {j} realization", fontsize=9)
 
     fig.suptitle(
-        "one standard likelihood, translated by the interaction phases  —  "
-        "rates dark 0 to light 1",
+        f"one standard likelihood, translated by the interaction angles  —  "
+        f"vars {var_i} and {var_j}, rates dark 0 to light 1",
         fontsize=12,
     )
     return fig
