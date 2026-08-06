@@ -110,11 +110,6 @@ Each episode:
    hypothetical joint realization.
 4. **Observations.** The agent sees `n_steps` i.i.d. samples from those rates.
 
-Stationary means the rate never changes within an episode. The difficulty is not
-tracking a moving target; it is that the mapping from realizations to rates is
-non-separable, so evidence about one variable is only interpretable given the
-others.
-
 <p align="center">
   <img src="docs/images/episode.png" alt="One episode's rate surface beside the two observers' belief traces" width="85%">
 </p>
@@ -127,10 +122,7 @@ the truth.
 
 ### Interactions are phase shifts of one standard likelihood
 
-There is only ever **one** rate pattern. What a pair of latent variables does is
-choose which part of it you see: the inner product of one variable's key with
-the other's query sets a *phase*, and the phase translates the pattern. The shape
-never changes.
+The inner product of one variable's key with the other's query sets a *phase* that translates the pattern.
 
 <p align="center">
   <img src="docs/images/interaction_phases.png" alt="Variable embeddings, the inner products they produce, and the standard likelihood pattern those phases translate" width="100%">
@@ -159,38 +151,11 @@ One row per observation channel, reading left to right:
    box edges takes the colour of the variable whose phase range it spans. Phase
    is periodic, so the pattern is drawn over two turns: a window that runs off
    one edge continues on the next copy, and stays a single box.
-4. **The rate table** that window yields.
-
-Colour means exactly one thing throughout: **which variable** an element belongs
-to. Interaction strengths belong to neither, so they get their own colour.
-Neither this figure nor the next marks which realization actually occurred —
-both are about how the world is built, not how one episode turned out.
-
-Comparing the rows is the point: same waveform, same pattern, different angles,
-different window, different table. Embeddings are orthogonalized across channels,
-so each channel gets an independent phase from the same pair of variables — two
-rows is enough to show they do not move together.
-
-This is exact, not a schematic. Reconstructing any episode's rate table from the
-standard pattern and its two interaction strengths agrees with `batch.rates` to
-floating-point precision, and a test asserts it.
-
-Two things follow. First, **novel variables are not special** — an unseen
-variable is just another phase, so the statistics it produces are lawful even
-though the agent has never encountered it. That is what makes compositional
-generalization a fair question here rather than an impossible one.
-
-Second, the **log-odds** are pairwise-decomposable — there is no three-way term
-anywhere — but the **probability** is not, and neither is the observation
-distribution. Average the table over one variable and much of its structure
-cancels: on this episode one variable's factorized rate is left nearly flat, so a
-factorized observer has almost no signal about it, while the joint observer reads
-it cleanly. How much survives varies by episode, and that variation is exactly
-what factorization regret measures.
+4. **The rate table** that window yields.\
 
 ### What a single observation actually says
 
-One channel is only part of the story. The agent sees a **vector** of
+The agent sees a **vector** of
 `n_observations` bits at once, and its likelihood is the product of the
 per-channel rates — each channel's rate where that bit is 1, its complement
 where the bit is 0.
@@ -205,28 +170,9 @@ from coggrid.viz import plot_evidence_likelihood
 plot_evidence_likelihood(batch, episode=0)
 ```
 
-The top row is the per-channel tables. Because the key and query embeddings are
-orthonormalized *across* channels, no channel is a shifted copy of another —
-each carves the realization plane its own way.
-
+The top row is the per-channel tables.
 The grid below is every observation vector the agent could receive, and the
-posterior each one induces from a uniform prior. Five binary channels give 32 of
-them, and they are strikingly varied: corners, bands, diagonal ridges,
-multimodal patches. Most are far sharper than any single channel, because
-agreement between channels concentrates mass where they overlap and cancels it
-elsewhere.
-
-This is why the task is solvable at all — and why factorizing is expensive. The
-information lives in *combinations* of channels evaluated jointly over both
-variables. Collapse the plane to two independent marginals and a large share of
-that structure averages away, taking with it precisely the distinctions between
-these panels.
-
-To change the interaction, replace a generative stage rather than tuning
-constants: `embeddings=` changes how variables relate and therefore which phases
-they produce, and `likelihood=` replaces the mechanism outright — adding a
-genuine three-way term, for instance. See
-[Customizing the generative model](#customizing-the-generative-model).
+posterior each one induces from a uniform prior. 
 
 ### The two baselines
 
