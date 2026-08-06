@@ -110,6 +110,28 @@ Each episode:
    hypothetical joint realization.
 4. **Observations.** The agent sees `n_steps` i.i.d. samples from those rates.
 
+### Every knob
+
+`CogGridConfig` holds the whole specification of a world. Nothing else configures
+the environment, and it is validated on construction, so an impossible
+combination fails immediately rather than producing quiet nonsense.
+
+| Field | Default | Meaning |
+| --- | --- | --- |
+| `n_vars` | 500 | Size of the latent-variable pool episodes draw from. |
+| `n_contexts` | 2 | Variables active per episode. The joint table is `n_realizations ** n_contexts` wide, so this drives memory. |
+| `n_realizations` | 10 | Discrete values each active variable can take. |
+| `n_observations` | 5 | Binary observation channels. |
+| `n_steps` | 30 | Observation samples per episode — the horizon. |
+| `embedding_dim` | 30 | Length of each key/query vector. Must be ≥ `n_observations`, since they are orthogonalized across channels. |
+| `likelihood_temp` | 2.0 | Scales the potentials before the sigmoid. Higher pushes rates towards 0/1, making single observations more informative. |
+| `likelihood_freq` | 1.0 | Periods in the value profile. Higher partitions the realization axis more finely. |
+| `n_episodes` | 1000 | Default batch size for `sample_episodes`. |
+| `n_held_out_vars` | `None` | Size of the held-out pool. `None` means `n_vars // 10`. Held-out variables are `range(n_held_out_vars)`. |
+| `subsample_vars` | `None` | If set, draw contexts from a random subset of this size within each split. |
+| `allow_repeated_vars` | `True` | Whether one episode may activate the same variable twice. |
+| `seed` | `None` | Seed for the default RNG. `None` means a fresh world each run. |
+
 <p align="center">
   <img src="docs/images/episode.png" alt="One episode's rate surface beside the two observers' belief traces" width="85%">
 </p>
@@ -131,8 +153,11 @@ The inner product of one variable's key with the other's query sets a *phase* th
 ```python
 from coggrid.viz import plot_interaction_phases
 
-plot_interaction_phases(world, batch, channels=(0, 1))
+plot_interaction_phases(world, batch, episode=0, channels=(0, 1))
 ```
+
+`episode` picks which episode of the batch to illustrate; `channels` picks which
+observation channels get a row.
 
 One row per observation channel, reading left to right:
 
@@ -239,9 +264,31 @@ from coggrid import CogGridVectorEnv
 venv = CogGridVectorEnv(n_envs=256, seed=0)
 ```
 
-The vector env matches how the environment is actually cheap to run — the joint
-likelihood is one vectorized einsum over the batch. `coggrid.env.register()` adds
-`CogGrid-v0` to the Gymnasium registry.
+`n_envs` is how many episodes run **side by side**. Every array gains a leading
+`n_envs` axis and all sub-episodes reset together — because the horizon is fixed
+and identical across episodes, they always finish at once, so there is no
+autoreset to reason about. This is the interface that matches how the environment
+is actually cheap to run: the joint likelihood is one vectorized einsum over the
+batch. `coggrid.env.register()` adds `CogGrid-v0` to the Gymnasium registry.
+
+> `n_envs` and `CogGridConfig.n_episodes` name the same quantity from two
+> places. The vector environment draws `n_envs` episodes per reset and **ignores
+> `n_episodes`**, which only supplies the default for a direct
+> `world.sample_episodes()` call.
+
+Both environments take the same keyword arguments:
+
+| Argument | Default | Meaning |
+| --- | --- | --- |
+| `config` | `None` | The world specification, per the table above. `None` builds a default `CogGridConfig()`. |
+| `world` | `None` | Draw from an existing `World` instead of building one, so several environments share embeddings and therefore the same split. Overrides `config`. |
+| `split` | `"held_out"` | Which variable pool episodes come from — see below. |
+| `reward_mode` | `"dense"` | `"dense"` scores every step, `"terminal"` only the last. |
+| `seed` | `None` | Seeds the world's embeddings and the episode stream. `None` means fresh episodes each run. |
+| `n_envs` | 64 | Vector env only: episodes run side by side. |
+| `buffer_size` | 256 | Single env only: episodes generated per internal refill. Sampling in blocks is much cheaper than one at a time; larger uses more memory. |
+| `expose_likelihood` | `False` | Single env only: put the joint and marginal rate tables in `info`. That is what an ideal-observer baseline needs — and exactly what a learning agent must not see, which is why it is off by default. |
+| `render_mode` | `None` | Single env only: `"ansi"` makes `render()` return a text summary of the current step. |
 
 ---
 
@@ -295,10 +342,14 @@ over time underneath:
 | `GRID_PANELS` | `joint`, `naive (factorized)`, and `joint − naive` — where factorizing moves probability mass. Each marks the truth in green and the observer's current mode with a white ring, and the axes name which variable is the **goal** (green) and which is **context** (orange). |
 | `TRACE_PANELS` | the evidence stream, revealed up to the current step |
 
-`animate_episode(batch, traces, extended=True)` — used for the animation at the
-top of this page — adds the goal variable's marginal belief and two panels
-relating factorization regret to dis-entanglement, one accumulating and one per
-step.
+`animate_episode` takes `episode` (which episode to play, default 0), `fps`
+(playback speed, default 6), and two arguments that decide what is drawn:
+
+- **`extended=True`** — used for the animation at the top of this page — adds the
+  goal variable's marginal belief and two panels relating factorization regret to
+  dis-entanglement, one accumulating and one per step.
+- **`panels`** — a list of rows, each row a list of panel functions, replacing the
+  default layout entirely. This is the extension point below.
 
 **Adding your own panel.** A panel draws its furniture into an axis and returns
 an updater called with the timestep, so extending the animation never means
