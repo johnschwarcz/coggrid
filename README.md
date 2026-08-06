@@ -159,12 +159,12 @@ One row per observation channel, reading left to right:
    box edges takes the colour of the variable whose phase range it spans. Phase
    is periodic, so the pattern is drawn over two turns: a window that runs off
    one edge continues on the next copy, and stays a single box.
-4. **The rate table** that window yields, with the realization that actually
-   occurred outlined in white.
+4. **The rate table** that window yields.
 
 Colour means exactly one thing throughout: **which variable** an element belongs
-to. Interaction strengths and the true realization belong to neither, so they get
-their own marks rather than borrowing a variable's.
+to. Interaction strengths belong to neither, so they get their own colour.
+Neither this figure nor the next marks which realization actually occurred —
+both are about how the world is built, not how one episode turned out.
 
 Comparing the rows is the point: same waveform, same pattern, different angles,
 different window, different table. Embeddings are orthogonalized across channels,

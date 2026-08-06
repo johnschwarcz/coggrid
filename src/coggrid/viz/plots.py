@@ -26,7 +26,6 @@ from typing import Any
 
 import matplotlib.pyplot as plt
 import numpy as np
-from matplotlib import patheffects
 from matplotlib.colors import LinearSegmentedColormap
 from matplotlib.figure import Figure
 from matplotlib.patches import Rectangle
@@ -700,63 +699,10 @@ def _pair_rank(i: int, j: int, n_contexts: int) -> int:
     return 2 * rank + (0 if i < j else 1)
 
 
-def _standard_waveform(cfg, n_samples: int = 2001) -> np.ndarray:
-    """The one potential waveform every variable is a phase-shifted copy of.
-
-    Sampled at ``n_samples`` points around the circle of ``cfg.n_roll`` slots.
-    Recovered by reading realization 0 as the interaction strength sweeps a full
-    turn, which is the same thing as evaluating the waveform at every phase.
-    """
-    turn = np.linspace(0.0, 1.0, n_samples)[:-1]
-    return gen.realization_potential(turn, gen.value_profile(cfg), cfg.n_roll)[:, 0]
-
-
-def _wave_at(cfg, waveform: np.ndarray, position: np.ndarray) -> np.ndarray:
-    """Evaluate the standard waveform at a continuous circular ``position``."""
-    turn = np.linspace(0.0, 1.0, waveform.size + 1)[:-1]
-    return np.interp(np.mod(position, cfg.n_roll) / cfg.n_roll, turn, waveform,
-                     period=1.0)
-
-
-def _standard_waveform(cfg, n_samples: int = 2001) -> np.ndarray:
-    """The one potential waveform every variable is a phase-shifted copy of.
-
-    Recovered by reading realization 0 as the interaction strength sweeps a full
-    turn, which is the same thing as evaluating the waveform at every phase.
-    """
-    turn = np.linspace(0.0, 1.0, n_samples)[:-1]
-    return gen.realization_potential(turn, gen.value_profile(cfg), cfg.n_roll)[:, 0]
-
-
-def _wave_at(cfg, waveform: np.ndarray, position: np.ndarray) -> np.ndarray:
-    """Evaluate the standard waveform at a continuous circular ``position``."""
-    turn = np.linspace(0.0, 1.0, waveform.size + 1)[:-1]
-    return np.interp(np.mod(position, cfg.n_roll) / cfg.n_roll, turn, waveform,
-                     period=1.0)
-
-
 #: Interaction strengths get their own colour throughout the phase figure, so
 #: that variable colours can mean "which variable owns this vector" and nothing
 #: else.
 PHASE_COLOR = "#7b52ab"
-
-
-def _mark_cell(ax: plt.Axes, x: float, y: float, lw: float = 1.8) -> None:
-    """Outline the realization that actually occurred.
-
-    Deliberately *not* a variable colour: green and orange say which variable an
-    element belongs to, and the truth belongs to both. White alone would vanish
-    at the light end of ``magma`` and black at the dark end, so it is drawn white
-    over a dark stroke and stays legible against any rate.
-    """
-    # clip_on=False so the stroke stays a closed box when the truth sits on an
-    # edge cell, rather than being shaved off by the axes limit.
-    patch = Rectangle((x - 0.5, y - 0.5), 1, 1, edgecolor="white",
-                      facecolor="none", lw=lw, clip_on=False)
-    patch.set_path_effects(
-        [patheffects.withStroke(linewidth=lw + 1.8, foreground="#1a1a1a")]
-    )
-    ax.add_patch(patch)
 
 
 def _standard_waveform(cfg, n_samples: int = 2001) -> np.ndarray:
@@ -831,12 +777,12 @@ def plot_interaction_phases(
        of box edges takes the colour of the variable whose phase range it spans.
        The pattern is periodic, so it is drawn over two turns and the window
        stays a single box — one that runs off an edge continues on the next copy.
-    4. **The rate table** that window yields, with the realization that actually
-       occurred outlined in white.
+    4. **The rate table** that window yields.
 
     Colour means exactly one thing here: **which variable** an element belongs
-    to. The interaction strengths and the true realization belong to neither
-    variable, so they get their own marks rather than borrowing a variable's.
+    to. Interaction strengths belong to neither, so they get their own colour.
+    Nothing marks which realization actually occurred — this figure is about how
+    the world is built, not about how one episode turned out.
 
     Comparing the rows is the point: same waveform, same pattern, different
     angles, different window, different table. Two channels are drawn rather than
@@ -883,7 +829,6 @@ def plot_interaction_phases(
     n_roll, n_r = cfg.n_roll, cfg.n_realizations
     waveform = _standard_waveform(cfg)
     realizations = np.arange(n_r)
-    truth = batch.ctx_vals[episode]
 
     if figsize is None:
         figsize = (15.0, 3.9 * len(channels))
@@ -960,7 +905,6 @@ def plot_interaction_phases(
         ax = axes[row][3]
         table = _pair_slice(batch.rates[episode, channel], i, j, cfg.n_contexts)
         ax.imshow(table.T, origin="lower", cmap="magma", vmin=0.0, vmax=1.0)
-        _mark_cell(ax, truth[i], truth[j], lw=2.0)
         ax.set_title("the rate table", fontsize=10)
         ax.set_xlabel(f"var {i} realization", fontsize=9)
         ax.set_ylabel(f"var {j} realization", fontsize=9)
@@ -1055,16 +999,9 @@ def plot_evidence_likelihood(
         fig = plt.figure(figsize=figsize, layout="constrained")
     top, bottom = fig.subfigures(2, 1, height_ratios=[1.25, 1.05 * n_rows])
 
-    truth = batch.ctx_vals[episode]
-
-    def _mark(ax):
-        if cfg.n_contexts > 1:
-            _mark_cell(ax, truth[i], truth[j], lw=1.4)
-
     channel_axes = top.subplots(1, cfg.n_observations, squeeze=False)[0]
     for c, ax in enumerate(channel_axes):
         ax.imshow(tables[c].T, origin="lower", cmap="magma", vmin=0.0, vmax=1.0)
-        _mark(ax)
         ax.set_title(f"channel {c}", fontsize=9)
         ax.set_xticks([]), ax.set_yticks([])
     top.suptitle(
@@ -1078,7 +1015,6 @@ def plot_evidence_likelihood(
             ax.set_visible(False)
             continue
         ax.imshow(surfaces[slot].T, origin="lower", cmap="viridis", vmin=0.0, vmax=1.0)
-        _mark(ax)
         ax.set_title("".join(str(int(b)) for b in bits[slot]), fontsize=8,
                      family="monospace")
         ax.set_xticks([]), ax.set_yticks([])
