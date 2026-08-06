@@ -180,6 +180,67 @@ class TestObservers:
             assert np.allclose(trace.belief.sum(-1), 1.0)
 
 
+class TestPhaseStructure:
+    """Interaction strength enters the likelihood only as a phase.
+
+    The README and ``plot_interaction_phases`` both claim every rate table is
+    one standard pattern, translated. These pin that down.
+    """
+
+    @staticmethod
+    def _waveform(cfg, n_samples=4001):
+        """The standard potential waveform, read off as the phase sweeps a turn."""
+        from coggrid.generative import realization_potential, value_profile
+
+        turn = np.linspace(0.0, 1.0, n_samples)[:-1]
+        return turn, realization_potential(turn, value_profile(cfg), cfg.n_roll)[:, 0]
+
+    def test_phase_is_linear_in_interaction_strength(self):
+        """Phase advances by ``-2*pi*likelihood_freq*z``, with fixed amplitude."""
+        from coggrid.generative import realization_potential, value_profile
+
+        for freq in (1.0, 2.0):
+            cfg = CogGridConfig(n_vars=60, n_realizations=10,
+                                likelihood_freq=freq, seed=0)
+            profile = value_profile(cfg)
+            r = np.arange(cfg.n_realizations)
+            basis = np.exp(-2j * np.pi * freq * r / cfg.n_roll)
+
+            zs = np.linspace(-0.45, 0.45, 31)
+            comp = np.array([
+                basis @ realization_potential(np.array(z), profile, cfg.n_roll)
+                for z in zs
+            ])
+            slope, intercept = np.polyfit(zs, np.unwrap(np.angle(comp)), 1)
+            assert slope == pytest.approx(-2 * np.pi * freq, rel=0.02)
+            # A pure phase shift leaves the amplitude alone.
+            assert np.ptp(np.abs(comp)) / np.abs(comp).mean() < 0.15
+            residual = np.abs(np.unwrap(np.angle(comp)) - (slope * zs + intercept))
+            assert residual.max() < 0.1
+
+    def test_every_rate_table_is_the_same_pattern_translated(self):
+        """Rebuild each table from one waveform plus its two strengths."""
+        from coggrid.generative import sigmoid
+
+        cfg = CogGridConfig(n_vars=200, n_contexts=2, n_realizations=10, seed=4)
+        batch = World(cfg).sample_episodes(6)
+        turn, waveform = self._waveform(cfg)
+        r = np.arange(cfg.n_realizations)
+
+        def wave(position):
+            return np.interp(np.mod(position, cfg.n_roll) / cfg.n_roll,
+                             turn, waveform, period=1.0)
+
+        worst = 0.0
+        for e in range(batch.n_episodes):
+            for c in range(cfg.n_observations):
+                z_ij, z_ji = batch.interactions[e, c, 0], batch.interactions[e, c, 1]
+                rebuilt = sigmoid(np.outer(wave(z_ij * cfg.n_roll - r),
+                                           wave(z_ji * cfg.n_roll - r)))
+                worst = max(worst, np.abs(rebuilt - batch.rates[e, c]).max())
+        assert worst < 1e-5
+
+
 # ------------------------------------------------------------ dis-entanglement
 class TestDisentanglement:
     """The §B.3 metric, independently of anything that draws it."""

@@ -178,26 +178,34 @@ class TestStaticFigures:
     def test_summary_figure_shape(self, batch, traces):
         assert len(summary_figure(batch, traces)) == 4
 
-    @pytest.mark.parametrize("n_contexts", [1, 2, 3])
-    def test_likelihood_construction_draws_four_steps(self, n_contexts):
-        """The construction figure is a fixed four-panel story at any width."""
-        from coggrid.viz import plot_likelihood_construction
+    @pytest.mark.parametrize("n_contexts", [2, 3, 4])
+    def test_interaction_phases_draws_six_panels(self, n_contexts):
+        from coggrid.viz import plot_interaction_phases
 
         world = World(SMALL.replace(n_contexts=n_contexts))
-        fig = plot_likelihood_construction(world.sample_episodes(4), episode=0)
-        assert len(fig.axes) == 4
+        fig = plot_interaction_phases(world, world.sample_episodes(4), episode=0)
+        assert len(fig.axes) == 6
 
-    def test_likelihood_construction_last_panel_is_the_real_table(self):
-        """Panel 4 must be read from ``batch.rates``, not rebuilt approximately.
+    def test_interaction_phases_needs_a_pair(self):
+        """A single variable has no partner to take a phase against."""
+        from coggrid.viz import plot_interaction_phases
 
-        The first three panels illustrate the built-in model; the last one has to
+        world = World(SMALL.replace(n_contexts=1))
+        with pytest.raises(ValueError, match="two active variables"):
+            plot_interaction_phases(world, world.sample_episodes(2))
+
+    def test_interaction_phases_last_panel_is_the_real_table(self):
+        """The final panel must be read from ``batch.rates``, not rebuilt.
+
+        The earlier panels illustrate the built-in mechanism; this one has to
         stay true even when a custom ``likelihood=`` made the others meaningless.
         """
-        from coggrid.viz import plot_likelihood_construction
+        from coggrid.viz import plot_interaction_phases
 
-        batch = World(SMALL.replace(n_contexts=2)).sample_episodes(4)
-        fig = plot_likelihood_construction(batch, episode=0, channel=0)
-        drawn = np.asarray(fig.axes[3].get_images()[0].get_array())
+        world = World(SMALL.replace(n_contexts=2))
+        batch = world.sample_episodes(4)
+        fig = plot_interaction_phases(world, batch, episode=0, channel=0)
+        drawn = np.asarray(fig.axes[5].get_images()[0].get_array())
         # Compared as multisets: which variable lands on which axis depends on
         # where the goal fell, and that is not what this test is about.
         assert np.allclose(np.sort(drawn, axis=None),

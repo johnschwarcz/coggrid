@@ -20,39 +20,9 @@ from coggrid.viz import (
     animate_episode,
     plot_episode,
     plot_evidence_likelihood,
-    plot_likelihood_construction,
+    plot_interaction_phases,
     plot_regret_analysis,
 )
-
-#: ``likelihood_temp`` scales the potentials before the sigmoid;
-#: ``likelihood_freq`` sets how many times the value profile wraps. Together they
-#: are the two knobs that shape the interaction without changing its form.
-TEMPS = (0.5, 2.0, 6.0)
-FREQS = (0.5, 1.0, 2.0)
-
-
-def knob_grid(seed: int, figsize=(9.0, 9.0)):
-    """One rate table per (temp, freq), all from the same variables and pair."""
-    fig, axes = plt.subplots(len(TEMPS), len(FREQS), figsize=figsize,
-                             layout="constrained")
-    for row, temp in enumerate(TEMPS):
-        for col, freq in enumerate(FREQS):
-            cfg = CogGridConfig(
-                n_vars=500, n_contexts=2, n_realizations=10,
-                likelihood_temp=temp, likelihood_freq=freq, seed=seed,
-            )
-            batch = World(cfg).sample_episodes(1)
-            ax = axes[row][col]
-            ax.imshow(batch.rates[0, 0], origin="lower", cmap="magma",
-                      vmin=0.0, vmax=1.0)
-            ax.set_xticks([]), ax.set_yticks([])
-            if row == 0:
-                ax.set_title(f"freq = {freq}", fontsize=11)
-            if col == 0:
-                ax.set_ylabel(f"temp = {temp}", fontsize=11)
-    fig.suptitle("what the two likelihood knobs do — dark 0 to light 1",
-                 fontsize=12)
-    return fig
 
 # Resolve the repository root without assuming __file__ exists: VS Code's
 # "run in interactive window" pastes this source into a cell rather than
@@ -73,15 +43,15 @@ if __name__ == "__main__":
     
     
     cfg = CogGridConfig(n_vars=500, n_contexts=2, n_realizations=10, seed=4)
-    batch = World(cfg).sample_episodes(args.episodes)
+    world = World(cfg)
+    batch = world.sample_episodes(args.episodes)
     traces = run_observers(batch)
 
     for name, fig in (
         ("episode", plot_episode(batch, traces, episode=0)),
         ("regret_analysis", plot_regret_analysis(batch, traces)),
-        ("likelihood_construction", plot_likelihood_construction(batch, episode=0)),
+        ("interaction_phases", plot_interaction_phases(world, batch, episode=0)),
         ("evidence_likelihood", plot_evidence_likelihood(batch, episode=0)),
-        ("likelihood_knobs", knob_grid(seed=4)),
     ):
         path = args.out / f"{name}.png"
         fig.savefig(path, dpi=110, bbox_inches="tight")

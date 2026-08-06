@@ -125,52 +125,51 @@ surface is visibly not the outer product of its own marginals — that mismatch 
 the entire task. Right: the evidence, and both observers converging (or not) on
 the truth.
 
-### How the interaction is built
+### Interactions are phase shifts of one standard likelihood
 
-The rate table is not drawn at random — it is constructed so that the
-*structure* of the interaction is controllable, and so that variables the agent
-has never seen still produce lawful statistics. That construction is the main
-thing worth customizing, so it is worth seeing in full.
+There is only ever **one** rate pattern. What a pair of latent variables does is
+choose which part of it you see: the inner product of one variable's key with
+the other's query sets a *phase*, and the phase translates the pattern. The shape
+never changes.
 
 <p align="center">
-  <img src="docs/images/likelihood_construction.png" alt="The four steps that turn two variable embeddings into a table of observation rates" width="100%">
+  <img src="docs/images/interaction_phases.png" alt="Variable embeddings, the inner products they produce, and the standard likelihood pattern those phases translate" width="100%">
 </p>
 
 ```python
-from coggrid.viz import plot_likelihood_construction
+from coggrid.viz import plot_interaction_phases
 
-plot_likelihood_construction(batch, episode=0, channel=0)
+plot_interaction_phases(world, batch, episode=0, channel=0)
 ```
 
 Each latent variable carries a **key** and a **query** embedding, one pair per
-observation channel, orthonormalized across channels so that each channel says
-something independent about the same pair of variables.
+observation channel (panels 1–2). Rows are unit vectors, orthogonalized across
+channels, so one pair of variables hands every channel an independent phase.
 
-1. **The value profile.** A sinusoid — `likelihood_freq` periods, scaled by
-   `likelihood_temp` — circularly shifted once per realization. Row `r` is the
-   profile realization `r` responds to, so no two realizations prefer the same
-   interaction strength. The circle has `1 + 2 * n_realizations` slots, longer
-   than the realization axis on purpose, so a strong interaction pushes mass
-   *around* the circle instead of piling it up at the edge.
-2. **Strength selects a realization.** For an ordered pair, the interaction
-   strength is the inner product `z_ij = ⟨K_i, Q_j⟩` — one scalar per channel.
-   It places a Gaussian bump on the circle, and reading that bump against the
-   profile gives a **potential over realizations**, `v_i(r)`.
-3. **Two directions, two potentials.** `⟨K_i, Q_j⟩` and `⟨K_j, Q_i⟩` are
-   different numbers — the inner product is deliberately *asymmetric*, which is
-   what lets a pair produce an anisotropic joint rather than a symmetric one.
-4. **The rate table.** Each pair contributes the outer product
-   `v_i(r_i) · v_j(r_j)` to the logits; the contributions are summed and
-   squashed, giving `P(observation = 1)` for every joint realization.
+The interaction strength is the inner product `z_ij = ⟨K_i, Q_j⟩` — one scalar
+per channel, per direction (panel 3). `⟨K_i, Q_j⟩` and `⟨K_j, Q_i⟩` are
+deliberately different, which is what stops the joint from being symmetric.
 
-The consequence is the point of the whole environment. The **log-odds** are
-pairwise-decomposable — there is no three-way term anywhere — but the
-**probability** is not, and neither is the observation distribution. Average
-panel 4 over one variable and much of its structure cancels: on this episode one
-variable's factorized rate is left nearly flat, so a factorized observer has
-almost no signal about it, while the joint observer reads it cleanly. How much
-survives varies by episode, and that variation is exactly what factorization
-regret measures.
+Each strength becomes a phase. The potential over realizations is a single
+sinusoid shifted by `−2π · likelihood_freq · z`, so both variables read the
+*same* waveform from different starting points (panel 4). Their outer product,
+squashed, is the rate table — and it is a window onto a fixed two-dimensional
+pattern, positioned by the two phases (panels 5–6). This is exact: reconstructing
+any episode's table from the standard pattern and its two strengths agrees with
+`batch.rates` to floating-point precision.
+
+Two things follow. First, **novel variables are not special** — an unseen
+variable is just another phase, so the statistics it produces are lawful even
+though the agent has never encountered it. That is what makes compositional
+generalization a fair question here rather than an impossible one.
+
+Second, the **log-odds** are pairwise-decomposable — there is no three-way term
+anywhere — but the **probability** is not, and neither is the observation
+distribution. Average the table over one variable and much of its structure
+cancels: on this episode one variable's factorized rate is left nearly flat, so a
+factorized observer has almost no signal about it, while the joint observer reads
+it cleanly. How much survives varies by episode, and that variation is exactly
+what factorization regret measures.
 
 ### What a single observation actually says
 
@@ -206,24 +205,11 @@ variables. Collapse the plane to two independent marginals and a large share of
 that structure averages away, taking with it precisely the distinctions between
 these panels.
 
-**The two knobs.** `likelihood_temp` and `likelihood_freq` shape the interaction
-without changing its form:
-
-<p align="center">
-  <img src="docs/images/likelihood_knobs.png" alt="Rate tables across a grid of likelihood_temp and likelihood_freq values" width="70%">
-</p>
-
-Temperature scales the potentials before the sigmoid: low, and every rate sits
-near 0.5 so single observations carry almost nothing; high, and rates saturate
-towards 0/1 so one sample is nearly decisive. Frequency sets how many times the
-profile wraps, which controls how finely the realization axis is partitioned —
-one period gives a single saddle, more gives a checkerboard with many small
-regions where the two variables must be resolved together.
-
-To change the interaction *structurally* rather than parametrically, replace a
-generative stage: `embeddings=` changes step 2 (how variables relate),
-`likelihood=` replaces steps 1–4 outright — adding a genuine three-way term, for
-instance. See [Customizing the generative model](#customizing-the-generative-model).
+To change the interaction, replace a generative stage rather than tuning
+constants: `embeddings=` changes how variables relate and therefore which phases
+they produce, and `likelihood=` replaces the mechanism outright — adding a
+genuine three-way term, for instance. See
+[Customizing the generative model](#customizing-the-generative-model).
 
 ### The two baselines
 

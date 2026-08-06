@@ -5,7 +5,10 @@ Every function here follows the same three rules:
 1. **It takes data, not a live simulator.** The argument is an
    :class:`~coggrid.world.EpisodeBatch` or a
    :class:`~coggrid.observers.BeliefTrace`, so you can plot a batch loaded from
-   disk six months later.
+   disk six months later. The one exception is
+   :func:`plot_interaction_phases`, which also needs the
+   :class:`~coggrid.World`: it draws the variable embeddings, and those live on
+   the world rather than on any batch drawn from it.
 2. **It returns the figure and never calls ``show()``.** The caller decides
    whether to display, save, or embed in a subplot grid. That is what makes the
    same function usable from a script, a notebook and a CI artifact job.
@@ -36,7 +39,7 @@ __all__ = [
     "display_pairs",
     "MAX_PAIRS",
     "plot_likelihood",
-    "plot_likelihood_construction",
+    "plot_interaction_phases",
     "plot_evidence_likelihood",
     "plot_trial",
     "plot_episode",
@@ -696,7 +699,26 @@ def _pair_rank(i: int, j: int, n_contexts: int) -> int:
     return 2 * rank + (0 if i < j else 1)
 
 
-def plot_likelihood_construction(
+def _standard_waveform(cfg, n_samples: int = 2001) -> np.ndarray:
+    """The one potential waveform every variable is a phase-shifted copy of.
+
+    Sampled at ``n_samples`` points around the circle of ``cfg.n_roll`` slots.
+    Recovered by reading realization 0 as the interaction strength sweeps a full
+    turn, which is the same thing as evaluating the waveform at every phase.
+    """
+    turn = np.linspace(0.0, 1.0, n_samples)[:-1]
+    return gen.realization_potential(turn, gen.value_profile(cfg), cfg.n_roll)[:, 0]
+
+
+def _wave_at(cfg, waveform: np.ndarray, position: np.ndarray) -> np.ndarray:
+    """Evaluate the standard waveform at a continuous circular ``position``."""
+    turn = np.linspace(0.0, 1.0, waveform.size + 1)[:-1]
+    return np.interp(np.mod(position, cfg.n_roll) / cfg.n_roll, turn, waveform,
+                     period=1.0)
+
+
+def plot_interaction_phases(
+    world: Any,
     batch: EpisodeBatch,
     episode: int = 0,
     channel: int = 0,
@@ -704,105 +726,151 @@ def plot_likelihood_construction(
     *,
     fig: Figure | None = None,
     palette: Palette = PALETTE,
-    figsize: tuple[float, float] = (16.0, 3.6),
+    figsize: tuple[float, float] = (14.0, 8.0),
 ) -> Figure:
-    """How a rate table is built, in the four steps the generative model takes.
+    """Interactions as **phase shifts of one standard joint likelihood**.
 
-    Reads left to right, and each panel is the input to the next:
+    Every rate table in the environment is the *same* pattern. What a pair of
+    latent variables does is choose which part of it you see: the inner product
+    of one variable's key with the other's query sets a phase, and the phase
+    translates the pattern. Nothing about the shape changes.
 
-    1. **The value profile.** A sinusoid, circularly shifted once per
-       realization. Row ``r`` is the strength profile that realization ``r``
-       responds to, so no two realizations prefer the same interaction strength.
-    2. **Strength selects a realization.** Sweeping the inner product of a key
-       against a query moves a Gaussian bump around the profile, giving a
-       potential over realizations. The two strengths this episode actually drew
-       are marked.
-    3. **This episode's two potentials.** The pair contributes one potential per
-       direction — ``<K_i, Q_j>`` and ``<K_j, Q_i>`` — and they differ, because
-       the inner product is *not* symmetric.
-    4. **The rate table.** Their outer product, squashed. The log-odds are
-       pairwise-decomposable but the probability is not, which is precisely what
-       a factorized observer cannot represent.
+    Concretely, the potential over realizations is a single sinusoid whose phase
+    is ``-2 * pi * likelihood_freq * z`` for interaction strength ``z``, so the
+    rate table is that fixed two-dimensional pattern sampled through a window
+    whose position the two strengths pick out. This holds to within floating
+    point for every episode and channel — the last panel and the boxed window in
+    the fifth are the same numbers.
 
-    This illustrates the **built-in** likelihood. Passing your own
-    ``likelihood=`` to :class:`~coggrid.World` replaces steps 1-3 wholesale;
-    only the last panel, read from ``batch.rates``, stays meaningful.
+    Reading it, top row then bottom:
+
+    1-2. The **key** and **query** embeddings of the two active variables, one
+    row per observation channel. Rows are unit vectors and are orthogonalized
+    across channels, so each channel gets an independent phase from the same
+    pair of variables.
+
+    3. Their inner products — one strength per channel and per direction.
+    ``<K_i, Q_j>`` and ``<K_j, Q_i>`` differ, which is what stops the joint from
+    being symmetric.
+
+    4. The standard waveform, with the two windows those strengths select. The
+    sampled potentials are the same curve read from different starting phases.
+
+    5. The standard joint pattern over a full turn in both variables, with this
+    episode's window boxed.
+
+    6. That window, on the realization grid — the rate table an observer sees.
+
+    This describes the **built-in** likelihood. Passing your own ``likelihood=``
+    to :class:`~coggrid.World` replaces the mechanism, and only the last panel
+    stays meaningful.
 
     Parameters
     ----------
+    world:
+        The :class:`~coggrid.World` the batch came from. Needed because the
+        embeddings live there rather than on the batch.
     batch:
-        Any :class:`~coggrid.world.EpisodeBatch`.
+        A batch drawn from ``world``.
     episode, channel:
         Which episode and observation channel to illustrate.
     pair:
         Which two active variables. Defaults to the first pair involving the
-        goal. Ignored when ``n_contexts == 1``, where a variable interacts with
-        itself.
+        goal.
     """
     cfg = batch.cfg
+    if cfg.n_contexts < 2:
+        raise ValueError(
+            "phase modulation needs two active variables to interact; "
+            "n_contexts=1 has a single self-interaction and no pair to show"
+        )
     goal = int(batch.goal_ind[episode])
     if pair is None:
-        pairs = display_pairs(cfg.n_contexts, goal, max_pairs=1)
-        pair = pairs[0] if pairs else (0, 0)
+        pair = display_pairs(cfg.n_contexts, goal, max_pairs=1)[0]
     i, j = pair
+    var_i, var_j = (int(batch.ctx_inds[episode, c]) for c in (i, j))
 
-    profile = gen.value_profile(cfg)
-    realizations = np.arange(cfg.n_realizations)
+    z_ij = batch.interactions[episode, :, _pair_rank(i, j, cfg.n_contexts)]
+    z_ji = batch.interactions[episode, :, _pair_rank(j, i, cfg.n_contexts)]
+    n_roll, n_r = cfg.n_roll, cfg.n_realizations
+    waveform = _standard_waveform(cfg)
+    realizations = np.arange(n_r)
 
     if fig is None:
         fig = plt.figure(figsize=figsize, layout="constrained")
-    axes = fig.subplots(1, 4)
+    axes = fig.subplots(2, 3)
 
-    # 1 ─ the profile every realization is a shifted copy of
-    axes[0].imshow(profile, aspect="auto", origin="lower", cmap="coolwarm",
-                   extent=(0, cfg.n_roll, -0.5, cfg.n_realizations - 0.5))
-    label_axes(axes[0], xlabel="strength slot", ylabel="realization",
-               title="1. value profile")
+    # ── 1-2: the embeddings themselves
+    for ax, matrix, name, var, colour in (
+        (axes[0][0], world.keys[var_i], f"keys  $K$  of var {i}", var_i,
+         palette.context(i, goal)),
+        (axes[0][1], world.queries[var_j], f"queries  $Q$  of var {j}", var_j,
+         palette.context(j, goal)),
+    ):
+        limit = np.abs(matrix).max()
+        ax.imshow(matrix, aspect="auto", cmap="RdBu_r", vmin=-limit, vmax=limit)
+        ax.set_title(f"{name}  (idx {var})", fontsize=10, color=colour)
+        ax.set_xlabel("embedding dimension")
+        ax.set_ylabel("channel")
+        ax.set_yticks(range(cfg.n_observations))
 
-    # 2 ─ how a strength maps onto that profile
-    sweep = np.linspace(-1.0, 1.0, 201)
-    potential = gen.realization_potential(sweep, profile, cfg.n_roll)
-    axes[1].imshow(potential.T, aspect="auto", origin="lower", cmap="coolwarm",
-                   extent=(sweep[0], sweep[-1], -0.5, cfg.n_realizations - 0.5))
-    if cfg.n_contexts > 1:
-        for c, direction in ((i, (i, j)), (j, (j, i))):
-            z = batch.interactions[episode, channel,
-                                   _pair_rank(*direction, cfg.n_contexts)]
-            axes[1].axvline(z, color=palette.context(c, goal), lw=2.0, ls="--")
-    label_axes(axes[1], xlabel=r"interaction strength  $\langle K, Q \rangle$",
-               ylabel="realization", title="2. strength picks a realization")
+    # ── 3: the inner products, one per channel and direction
+    ax = axes[0][2]
+    width = 0.38
+    channels = np.arange(cfg.n_observations)
+    ax.bar(channels - width / 2, z_ij, width, color=palette.context(i, goal),
+           label=r"$\langle K_i, Q_j \rangle$")
+    ax.bar(channels + width / 2, z_ji, width, color=palette.context(j, goal),
+           label=r"$\langle K_j, Q_i \rangle$")
+    ax.axhline(0.0, color="k", lw=1.0)
+    ax.axvline(channel - 0.5, color=palette.grid, lw=0)
+    ax.set_xticks(channels)
+    label_axes(ax, xlabel="channel", ylabel="interaction strength  $z$",
+               title="inner products set the phase")
+    ax.legend(fontsize=9, frameon=False)
 
-    # 3 ─ the two potentials this episode drew
-    if cfg.n_contexts > 1:
-        for c, direction in ((i, (i, j)), (j, (j, i))):
-            z = batch.interactions[episode, channel,
-                                   _pair_rank(*direction, cfg.n_contexts)]
-            values = gen.realization_potential(np.array(z), profile, cfg.n_roll)
-            role = "goal" if c == goal else "context"
-            axes[2].plot(realizations, values, color=palette.context(c, goal),
-                         marker="o", ms=4, label=f"var {c} ({role})")
-        axes[2].legend(fontsize=8, frameon=False)
-        axes[2].axhline(0.0, color=palette.grid, lw=1.0)
-    label_axes(axes[2], xlabel="realization", ylabel="potential",
-               title="3. one potential per direction")
-    axes[2].grid(alpha=0.25, color=palette.grid)
+    # ── 4: one waveform, two starting phases
+    ax = axes[1][0]
+    turn = np.arange(n_roll * 8) / 8.0
+    ax.plot(turn, _wave_at(cfg, waveform, turn), color="0.35", lw=1.4,
+            label="standard waveform")
+    for c, z, marker in ((i, z_ij[channel], "o"), (j, z_ji[channel], "s")):
+        positions = z * n_roll - realizations
+        ax.plot(np.mod(positions, n_roll), _wave_at(cfg, waveform, positions),
+                marker, ms=6, color=palette.context(c, goal),
+                label=f"var {c}  ($z$ = {z:+.2f})")
+    label_axes(ax, xlabel="phase (slots around the circle)", ylabel="potential",
+               title=f"4. one waveform, two phases (channel {channel})")
+    ax.legend(fontsize=8, frameon=False)
+    ax.grid(alpha=0.25, color=palette.grid)
 
-    # 4 ─ the table an observer actually sees
-    rates = _pair_slice(batch.rates[episode, channel], i, j, cfg.n_contexts)
-    axes[3].imshow(np.atleast_2d(rates).T, origin="lower", cmap="magma",
-                   vmin=0.0, vmax=1.0, aspect="auto")
+    # ── 5: the standard pattern, and the window this episode selects
+    ax = axes[1][1]
+    axis = np.arange(n_roll * 4) / 4.0
+    pattern = gen.sigmoid(np.outer(_wave_at(cfg, waveform, axis),
+                                   _wave_at(cfg, waveform, axis)))
+    ax.imshow(pattern.T, origin="lower", cmap="magma", vmin=0.0, vmax=1.0,
+              extent=(0, n_roll, 0, n_roll))
+    ax.plot(np.mod(z_ij[channel] * n_roll - realizations, n_roll)[:, None].repeat(n_r, 1),
+            np.mod(z_ji[channel] * n_roll - realizations, n_roll)[None, :].repeat(n_r, 0),
+            ".", color=palette.goal, ms=3.5)
+    label_axes(ax, xlabel=f"phase of var {i}", ylabel=f"phase of var {j}",
+               title="5. the standard joint pattern")
+
+    # ── 6: what the observer actually gets
+    ax = axes[1][2]
+    table = _pair_slice(batch.rates[episode, channel], i, j, cfg.n_contexts)
+    ax.imshow(table.T, origin="lower", cmap="magma", vmin=0.0, vmax=1.0)
     truth = batch.ctx_vals[episode]
-    if cfg.n_contexts > 1:
-        axes[3].add_patch(Rectangle((truth[i] - 0.5, truth[j] - 0.5), 1, 1,
-                                    edgecolor=palette.goal, facecolor="none", lw=2.0))
-    label_axes(axes[3], xlabel=f"var {i}",
-               ylabel=f"var {j}" if cfg.n_contexts > 1 else "",
-               title="4. rate = $\\sigma(v_i \\otimes v_j)$")
+    ax.add_patch(Rectangle((truth[i] - 0.5, truth[j] - 0.5), 1, 1,
+                           edgecolor=palette.goal, facecolor="none", lw=2.0))
+    label_axes(ax, xlabel=f"var {i} realization", ylabel=f"var {j} realization",
+               title="6. the rate table")
 
     fig.suptitle(
-        f"building P(observation {channel} = 1) — "
-        f"dark 0 to light 1, green marks the truth",
-        fontsize=11,
+        "one standard likelihood, translated by the interaction phases  —  "
+        "rates dark 0 to light 1",
+        fontsize=12,
     )
     return fig
 
