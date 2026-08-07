@@ -132,16 +132,6 @@ combination fails immediately rather than producing quiet nonsense.
 | `allow_repeated_vars` | `True` | Whether one episode may activate the same variable twice. |
 | `seed` | `None` | Seed for the default RNG. `None` means a fresh world each run. |
 
-<p align="center">
-  <img src="docs/images/episode.png" alt="One episode's rate surface beside the two observers' belief traces" width="85%">
-</p>
-
-Left: the rate surface for one observation channel over both active variables,
-with the *factorized* rate drawn as a profile along the top and right edges. The
-surface is visibly not the outer product of its own marginals — that mismatch is
-the entire task. Right: the evidence, and both observers converging (or not) on
-the truth.
-
 ### Interactions are phase shifts of one standard likelihood
 
 The inner product of one variable's key with the other's query sets a *phase* that translates the pattern.
@@ -209,6 +199,14 @@ posterior each one induces from a uniform prior.
 Both run in log space with a cumulative sum rather than a per-step
 multiply-and-renormalize, so neither underflows at long horizons (tested to
 `n_steps=4000`).
+
+<p align="center">
+  <img src="docs/images/episode.png" alt="One episode's rate surface beside the two observers' belief traces" width="85%">
+</p>
+
+Left: the rate surface for one observation channel over both active variables,
+with the *factorized* rate drawn along the top and right edges. Right: the evidence, and observers' estimates of the state of the world.
+
 
 ### Train / held-out splits
 
