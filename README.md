@@ -200,14 +200,6 @@ Both run in log space with a cumulative sum rather than a per-step
 multiply-and-renormalize, so neither underflows at long horizons (tested to
 `n_steps=4000`).
 
-<p align="center">
-  <img src="docs/images/episode.png" alt="One episode's rate surface beside the two observers' belief traces" width="85%">
-</p>
-
-Left: the rate surface for one observation channel over both active variables,
-with the *factorized* rate drawn along the top and right edges. Right: the evidence, and observers' estimates of the state of the world.
-
-
 ### Train / held-out splits
 
 ```python
