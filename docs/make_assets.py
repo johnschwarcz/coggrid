@@ -24,9 +24,6 @@ from coggrid.viz import (
     plot_regret_analysis,
 )
 
-#: One animation per seed. Two is enough to show that episodes differ.
-ANIMATION_SEEDS = (12, 27)
-
 # Resolve the repository root without assuming __file__ exists: VS Code's
 # "run in interactive window" pastes this source into a cell rather than
 # executing the file, and a pasted cell has no __file__ at all.
@@ -62,7 +59,10 @@ if __name__ == "__main__":
         plt.close(fig)
         print("wrote", path, f"({path.stat().st_size / 1e3:.0f} kB)")
 
-    # Two episodes from different seeds, so the README shows that they differ.
+    # One animation per seed, numbered in order. Add a seed here and the README
+    # gains episode_animation_2.gif, and so on.
+    ANIMATION_SEEDS = [37]
+
     for n, seed in enumerate(ANIMATION_SEEDS, start=1):
         anim = CogGridConfig(
             n_vars=500, n_contexts=2, n_realizations=10, n_steps=30, seed=seed)

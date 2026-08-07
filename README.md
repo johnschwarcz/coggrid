@@ -16,15 +16,14 @@ Latent variables interact *pairwise* to produce observation statistics, so the
 observation distribution does not factorize over them. An agent that represents
 the latent space as independent factors is therefore provably lossy.
 
-Two example episodes:
+An example episode:
 <p align="center">
   <img src="docs/images/episode_animation_1.gif" alt="An episode playing back: joint and naive posteriors, their difference, and the evidence stream" width="100%">
-  <img src="docs/images/episode_animation_2.gif" alt="A second episode, from a different seed" width="100%">
 </p>
 
 <p align="center"><em>
-Top: the optimal observer's posterior, the naive observer's posterior, and where they disagree. Bottom:
-the evidence stream.
+Top: the optimal observer's posterior, the naive observer's posterior, and where
+they disagree. Bottom: the evidence stream.
 </em></p>
 
 ---
