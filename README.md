@@ -39,7 +39,12 @@ they disagree. Bottom: the evidence stream.
 ([§3.1](https://arxiv.org/abs/2603.27134)) — measures the cost of factorizing inference of interacting latent variables.
 
 ```python
+from coggrid import CogGridConfig, World, run_observers
 from coggrid import factorization_regret, disentanglement
+
+world = World(CogGridConfig(n_vars=500, n_contexts=2, seed=0))
+batch = world.sample_episodes(2000)
+traces = run_observers(batch)
 
 factorization_regret(traces["joint"], traces["naive"])   # (n_episodes, n_steps)
 disentanglement(traces["joint"], traces["naive"], batch) # (n_episodes, n_steps)
