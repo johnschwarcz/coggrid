@@ -35,15 +35,8 @@ they disagree. Bottom: the evidence stream.
   <img src="docs/images/regret_analysis.png" alt="Factorization regret predicts the naive observer's failures but not the joint observer's" width="100%">
 </p>
 
-**Factorization regret** — `D_KL(B_joint ‖ B_naive)` over the goal variable
-([§3.1](https://arxiv.org/abs/2603.27134)) — measures how far factorizing has
-pushed the belief from optimal.
-
-The middle panel is the point. Binned by regret, the joint observer's accuracy is
-essentially flat while the naive observer's collapses. Regret is **not** a
-measure of how hard an episode is — a hard episode would hurt both. It is
-specifically a measure of *nuance*: how much *factorizing* costs on that episode.
-The correlation behind each curve is printed in the panel's legend.
+**Factorization regret** — `D_KL(B_joint ‖ B_naive)` 
+([§3.1](https://arxiv.org/abs/2603.27134)) — measures the cost of factorizing inference of interacting latent variables.
 
 ```python
 from coggrid import factorization_regret, disentanglement
@@ -52,11 +45,8 @@ factorization_regret(traces["joint"], traces["naive"])   # (n_episodes, n_steps)
 disentanglement(traces["joint"], traces["naive"], batch) # (n_episodes, n_steps)
 ```
 
-**Dis-entanglement** ([§B.3](https://arxiv.org/abs/2603.27134)) is the companion
-measure: the Jeffreys divergence between the naive marginal likelihood
-`p(o_t | r)` and the history-conditioned one `p(o_t | r, o_1:t-1)`. It is zero
-exactly when the marginal belief dynamics are Markovian, so it captures how much
-of a step's update depends on what came before.
+**Dis-entanglement** ([§B.3](https://arxiv.org/abs/2603.27134)) is the Jeffreys divergence between the naive marginal likelihood
+`p(o_t | r)` and the history-dependent one `p(o_t | r, o_1:t-1)`. It is zero when the marginal belief dynamics are Markovian.
 
 ---
 
