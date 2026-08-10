@@ -145,12 +145,7 @@ from coggrid.viz import plot_interaction_phases
 
 plot_interaction_phases(world, batch, episode=0, channels=(0, 1))
 ```
-
-`episode` picks which episode of the batch to illustrate; `channels` picks which
-observation channels get a row.
-
-One row per observation channel, reading left to right:
-
+Reading left to right:
 1. **Embeddings.** Each latent variable carries a **key** and a **query** vector
    per channel. Both are unit vectors, so the cosine of the angle between one
    variable's key and the other's query *is* the interaction strength `z`. Arrow
