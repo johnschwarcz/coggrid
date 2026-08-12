@@ -60,6 +60,7 @@ from coggrid.viz import animate_interaction_phases, plot_interaction_phases
 plot_interaction_phases(world, batch, episode=0, channels=(0,))
 animate_interaction_phases(world, batch, episode=0)
 ```
+
 Reading left to right:
 1. **Embeddings.** Each latent variable carries a **key** and a **query** vector
    per channel. The angle between one variable's key and the other's query gives a score `z`. 
@@ -67,11 +68,14 @@ Reading left to right:
 3. **The standard pattern**, Sinasoids are expanded to a repeating pattern through an outer product.
 4. **The selected pattern**  A specific pair of scores defines a specific region of the pattern.
 
+### Impact of rotating the embeddings
 Turning the keys sweeps the scores, and every panel to the right follows:
 
 <p align="center">
   <img src="docs/images/interaction_phases_animated.gif" alt="Turning a variable's key sweeps its interaction score, sliding the selected region across the standard pattern" width="100%">
 </p>
+
+Note: This is meant to demonstrate how embeddings impact the likelihood. Embeddings are never actually rotated.
 
 ### What a single observation actually says
 
