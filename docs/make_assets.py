@@ -18,6 +18,7 @@ import matplotlib.pyplot as plt
 from coggrid import CogGridConfig, World, run_observers
 from coggrid.viz import (
     animate_episode,
+    animate_interaction_phases,
     plot_episode,
     plot_evidence_likelihood,
     plot_interaction_phases,
@@ -50,7 +51,6 @@ if __name__ == "__main__":
     for name, fig in (
         ("episode", plot_episode(batch, traces, episode=0)),
         ("regret_analysis", plot_regret_analysis(batch, traces)),
-        ("interaction_phases", plot_interaction_phases(world, batch, episode=0)),
         ("evidence_likelihood", plot_evidence_likelihood(batch, episode=0)),
     ):
         path = args.out / f"{name}.png"
@@ -58,6 +58,20 @@ if __name__ == "__main__":
         # These are pyplot-managed, so they stay alive until closed.
         plt.close(fig)
         print("wrote", path, f"({path.stat().st_size / 1e3:.0f} kB)")
+
+    # Two figures rather than one: the still loads at once and carries the
+    # reading, and the animation below it only has to show the motion.
+    fig = plot_interaction_phases(world, batch, episode=0, channels=(0,))
+    path = args.out / "interaction_phases.png"
+    fig.savefig(path, dpi=110, bbox_inches="tight")
+    plt.close(fig)
+    print("wrote", path, f"({path.stat().st_size / 1e3:.0f} kB)")
+
+    # Frames drive the file size and fps does not, so the motion is slowed by
+    # lowering fps rather than by adding frames.
+    clip = animate_interaction_phases(world, batch, episode=0, n_frames=120, fps=10)
+    path = clip.save(args.out / "interaction_phases_animated")
+    print("wrote", path, f"({path.stat().st_size / 1e3:.0f} kB)")
 
     # One animation per seed, numbered in order. Add a seed here and the README
     # gains episode_animation_2.gif, and so on.

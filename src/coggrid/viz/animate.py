@@ -30,6 +30,7 @@ index and the palette, plus the derived arrays panels tend to want.
 
 from __future__ import annotations
 
+import io
 import tempfile
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
@@ -44,15 +45,25 @@ from matplotlib.colors import LinearSegmentedColormap, to_hex
 from matplotlib.figure import Figure
 from matplotlib.patches import Rectangle
 
+from .. import generative as gen
 from ..observers import BeliefTrace, disentanglement, factorization_regret
 from ..world import EpisodeBatch
-from .plots import MAX_PAIRS, display_pairs
+from .plots import (
+    MAX_PAIRS,
+    PHASE_COLOR,
+    _draw_phase_columns,
+    _phase_pattern,
+    _standard_waveform,
+    _wave_at,
+    display_pairs,
+)
 from .style import PALETTE, Palette, label_axes
 
 __all__ = [
     "EpisodeView",
     "EpisodeAnimation",
     "animate_episode",
+    "animate_interaction_phases",
     "observations_panel",
     "joint_posterior_panel",
     "naive_posterior_panel",
@@ -572,13 +583,23 @@ class EpisodeAnimation:
     """
 
     def __init__(
-        self, fig: Figure, anim: FuncAnimation, fps: int, n_frames: int
+        self,
+        fig: Figure,
+        anim: FuncAnimation,
+        fps: int,
+        n_frames: int,
+        draw: Callable[[int], Any] | None = None,
+        colors: int | None = None,
     ) -> None:
         self.fig = fig
         self.anim = anim
         self.fps = fps
         #: Frame count, tracked here because matplotlib keeps its own private.
         self.n_frames = n_frames
+        #: Per-frame draw callback, needed only by the shared-palette encoder.
+        self.draw = draw
+        #: Palette size for that encoder; ``None`` uses matplotlib's writer.
+        self.colors = colors
         self._gif: bytes | None = None
 
     def save(self, path: str | Path) -> Path:
@@ -591,13 +612,56 @@ class EpisodeAnimation:
     def to_gif(self) -> bytes:
         """Encode once and cache; a re-display should not re-render every frame."""
         if self._gif is None:
-            # matplotlib resolves the output path on disk, so an in-memory
-            # buffer is not an option here.
-            with tempfile.TemporaryDirectory() as tmp:
-                scratch = Path(tmp) / "episode.gif"
-                self.anim.save(scratch, writer=PillowWriter(fps=self.fps))
-                self._gif = scratch.read_bytes()
+            if self.colors is not None and self.draw is not None:
+                self._gif = self._shared_palette_gif()
+            else:
+                # matplotlib resolves the output path on disk, so an in-memory
+                # buffer is not an option here.
+                with tempfile.TemporaryDirectory() as tmp:
+                    scratch = Path(tmp) / "episode.gif"
+                    self.anim.save(scratch, writer=PillowWriter(fps=self.fps))
+                    self._gif = scratch.read_bytes()
         return self._gif
+
+    def _shared_palette_gif(self) -> bytes:
+        """Encode with one palette for every frame, and no dithering.
+
+        matplotlib's writer quantizes each frame independently and dithers,
+        which makes even *unchanged* regions differ pixel by pixel between
+        frames and defeats GIF's frame-to-frame compression. Pinning a single
+        palette and turning dithering off keeps static areas byte-identical,
+        which on a figure that is mostly still is worth several times the file
+        size.
+        """
+        from PIL import Image
+
+        assert self.draw is not None and self.colors is not None
+        rendered = []
+        for frame in range(self.n_frames):
+            self.draw(frame)
+            buf = io.BytesIO()
+            self.fig.savefig(buf, format="png")
+            buf.seek(0)
+            rendered.append(Image.open(buf).convert("RGB"))
+
+        # Build the palette from a frame partway in, so it reflects the colours
+        # the animation actually spends its time showing.
+        reference = rendered[len(rendered) // 3].quantize(
+            colors=self.colors, dither=Image.Dither.NONE
+        )
+        frames = [
+            im.quantize(palette=reference, dither=Image.Dither.NONE)
+            for im in rendered
+        ]
+        # Every frame really was drawn, just not through matplotlib's writer,
+        # so quiet the warning its Animation raises when collected unrendered.
+        self.anim._draw_was_started = True
+        out = io.BytesIO()
+        frames[0].save(
+            out, format="GIF", save_all=True, append_images=frames[1:],
+            duration=round(1000 / self.fps), loop=0, optimize=True,
+        )
+        return out.getvalue()
 
     def to_html(self) -> str:
         """An HTML5 player with scrub and loop controls.
@@ -726,3 +790,211 @@ def animate_episode(
         fig, draw, frames=n_steps, interval=1000 // fps, blit=False
     )
     return EpisodeAnimation(fig, anim, fps, n_frames=n_steps)
+
+
+# --------------------------------------------------------------------------- #
+# the interaction phases, swept
+# --------------------------------------------------------------------------- #
+def _window_anchor(strengths: np.ndarray, cfg) -> float:
+    """Which turn to express a swept window's position in.
+
+    The pattern repeats every ``n_roll`` slots, so a window's position is only
+    defined modulo a turn. Left at the default, a sweep that crosses a turn
+    boundary makes the box jump from one edge of the panel to the other. Anchor
+    it to the lowest position the sweep reaches and the box slides instead.
+    """
+    raw = np.asarray(strengths) * cfg.n_roll - (cfg.n_realizations - 1)
+    low, width = float(raw.min()), float(raw.max() - raw.min())
+    if width >= cfg.n_roll:
+        return 0.0  # the sweep covers a whole turn; wrapping cannot be avoided
+    room = 2 * cfg.n_roll - (cfg.n_realizations - 1)
+    anchor = low
+    while anchor < 0:
+        anchor += cfg.n_roll
+    while anchor + width > room:
+        anchor -= cfg.n_roll
+    return anchor if anchor >= 0 else 0.0
+
+
+def _draw_embedding_circle(
+    ax: Axes,
+    pair: tuple[int, int],
+    colours: tuple[str, str],
+    angles: tuple[float, float],
+    strengths: tuple[float, float],
+    *,
+    palette: Palette,
+    emphasise_keys: bool,
+) -> None:
+    """The two key/query pairs on a unit circle, with the keys free to turn.
+
+    Each query is a fixed reference direction and each key swings against it, so
+    the angle you watch opening and closing *is* the interaction strength.
+    """
+    i, j = pair
+    colour_i, colour_j = colours
+    theta_i, theta_j = angles
+    z_ij, z_ji = strengths
+    key_style = (3.0, 1.0) if emphasise_keys else (2.2, 1.0)
+    query_style = (1.8, 0.45) if emphasise_keys else (2.2, 1.0)
+
+    circle = np.linspace(0, 2 * np.pi, 200)
+    ax.plot(np.cos(circle), np.sin(circle), color=palette.grid, lw=1.0, ls=":")
+    # Keys and queries get different label radii. A key swings right up to its
+    # query when z approaches 1, and at a shared radius the two labels would
+    # land on the same point and overprint each other.
+    for theta, colour, tip, (lw, alpha), radius in (
+        (np.pi / 2, colour_j, f"$Q_{j}$", query_style, 1.45),
+        (-np.pi / 2, colour_i, f"$Q_{i}$", query_style, 1.45),
+        (theta_i, colour_i, f"$K_{i}$", key_style, 1.18),
+        (theta_j, colour_j, f"$K_{j}$", key_style, 1.18),
+    ):
+        ax.annotate("", xy=(np.cos(theta), np.sin(theta)), xytext=(0, 0),
+                    arrowprops=dict(arrowstyle="-|>", color=colour, lw=lw,
+                                    alpha=alpha, shrinkA=0, shrinkB=0))
+        ax.text(radius * np.cos(theta), radius * np.sin(theta), tip, color=colour,
+                ha="center", va="center", fontsize=11, alpha=alpha)
+
+    # Each arc is purple, because an angle belongs to neither variable. Its
+    # value is written below in the colour of the variable whose phase it sets.
+    for start, end, radius in (
+        (np.pi / 2, theta_i, 0.45),
+        (-np.pi / 2, theta_j, 0.72),
+    ):
+        span = np.linspace(start, end, 60)
+        ax.plot(radius * np.cos(span), radius * np.sin(span), color=PHASE_COLOR, lw=1.4)
+
+    # The readouts are pinned to the panel corners rather than placed along each
+    # arc. As z approaches 1 the arc collapses onto its two vectors, so anything
+    # following the bisector lands on their names — and that is exactly the part
+    # of the sweep worth reading.
+    for y, va, label, colour in (
+        (0.99, "top", f"$z_{{{i}{j}}}$={z_ij:+.2f}", colour_i),
+        (0.01, "bottom", f"$z_{{{j}{i}}}$={z_ji:+.2f}", colour_j),
+    ):
+        ax.text(0.01, y, label, transform=ax.transAxes, color=colour,
+                ha="left", va=va, fontsize=10)
+
+    ax.set_xlim(-1.95, 1.95), ax.set_ylim(-1.95, 1.95)
+    ax.set_aspect("equal"), ax.set_xticks([]), ax.set_yticks([])
+    for spine in ax.spines.values():
+        spine.set_visible(False)
+
+
+def animate_interaction_phases(
+    world: Any,
+    batch: EpisodeBatch,
+    episode: int = 0,
+    channel: int = 0,
+    pair: tuple[int, int] | None = None,
+    *,
+    n_frames: int = 60,
+    fps: int = 6,
+    swing: tuple[float, float] = (26.0, 24.0),
+    centre: tuple[float, float] = (33.0, 33.0),
+    colors: int = 128,
+    dpi: int = 84,
+    palette: Palette = PALETTE,
+    figsize: tuple[float, float] = (12.5, 3.6),
+) -> EpisodeAnimation:
+    """Turn the keys and watch the whole likelihood follow.
+
+    The top row is one real pair, fixed. Below it the same pair has its two
+    **keys** swept while the queries hold still, so every panel to the right
+    moves in step: the phase markers slide along the one standard waveform, the
+    window translates across the standard pattern, and the rate table
+    restructures.
+
+    Nothing here is interpolated. Each frame's table is rebuilt from that frame's
+    two strengths through the same construction the environment uses, so every
+    table shown is one the world would genuinely produce for those angles.
+
+    The keys swing rather than spin. Near a right angle the cosine is steepest,
+    so a gentle rock already sweeps the phase across more than a full window —
+    and small motion keeps successive frames nearly identical, which is most of
+    why the GIF stays small.
+
+    Parameters
+    ----------
+    world, batch, episode, channel, pair:
+        As :func:`~coggrid.viz.plots.plot_interaction_phases`, except that one
+        channel is shown rather than several.
+    n_frames, fps:
+        Frame count and playback rate. Frames drive the file size; ``fps`` is
+        free, so lower it to slow the motion without paying for it.
+    swing, centre:
+        Amplitude and midpoint, in degrees, of each key's rock. The first key
+        completes one cycle per loop and the second two, so the window traces a
+        figure-eight rather than sliding along a line. The default keeps every
+        swept phase inside a single turn, so nothing wraps around a panel edge
+        mid-loop: the realizations occupy ``n_realizations - 1`` slots of
+        ``n_roll``, which leaves the rest as room to travel, and a centre near
+        the steep part of the cosine buys a wide sweep from a small rotation.
+    colors, dpi:
+        Palette size and resolution. Both trade picture quality against
+        file size; frame count is the other lever.
+
+    Returns
+    -------
+    EpisodeAnimation
+        Plays inline in a notebook; ``.save(path)`` writes the GIF.
+    """
+    cfg = batch.cfg
+    if cfg.n_contexts < 2:
+        raise ValueError(
+            "phase modulation needs two active variables to interact; "
+            "n_contexts=1 has a single self-interaction and no pair to show"
+        )
+    if not 0 <= channel < cfg.n_observations:
+        raise ValueError(
+            f"channel must lie in [0, {cfg.n_observations}), got {channel}"
+        )
+
+    goal = int(batch.goal_ind[episode])
+    if pair is None:
+        pair = display_pairs(cfg.n_contexts, goal, max_pairs=1)[0]
+    i, j = pair
+    colours = (palette.context(i, goal), palette.context(j, goal))
+
+    waveform = _standard_waveform(cfg)
+    pattern = _phase_pattern(cfg, waveform)
+    realizations = np.arange(cfg.n_realizations)
+    swing_i, swing_j = np.deg2rad(swing)
+    centre_i, centre_j = np.deg2rad(centre)
+    phase = 2 * np.pi * np.arange(n_frames) / n_frames
+    theta_i = np.pi / 2 + centre_i + swing_i * np.sin(phase)
+    theta_j = -np.pi / 2 + centre_j + swing_j * np.sin(2 * phase)
+    swept_ij = np.cos(theta_i - np.pi / 2)
+    swept_ji = np.cos(theta_j + np.pi / 2)
+    anchor = (_window_anchor(swept_ij, cfg), _window_anchor(swept_ji, cfg))
+
+    fig = Figure(figsize=figsize, dpi=dpi, layout="constrained")
+    axes = fig.subplots(1, 4, squeeze=False)[0]
+
+    def draw(frame: int) -> list[Any]:
+        for ax in axes:
+            ax.clear()
+
+        z_ij, z_ji = float(swept_ij[frame]), float(swept_ji[frame])
+        table = gen.sigmoid(np.outer(
+            _wave_at(cfg, waveform, z_ij * cfg.n_roll - realizations),
+            _wave_at(cfg, waveform, z_ji * cfg.n_roll - realizations)))
+        _draw_embedding_circle(
+            axes[0], (i, j), colours,
+            (float(theta_i[frame]), float(theta_j[frame])), (z_ij, z_ji),
+            palette=palette, emphasise_keys=True)
+        axes[0].set_title("impact of rotating embeddings", fontsize=10)
+        _draw_phase_columns(axes[1:], cfg, waveform, pattern, (i, j), colours,
+                            (z_ij, z_ji), table, palette=palette,
+                            legend=False, window_anchor=anchor)
+
+        fig.suptitle(
+            "one standard likelihood, translated by the interaction angles  —  "
+            f"vars {batch.ctx_inds[episode, i]} and {batch.ctx_inds[episode, j]}, "
+            "rates dark 0 to light 1",
+            fontsize=12,
+        )
+        return []
+
+    anim = FuncAnimation(fig, draw, frames=n_frames, interval=1000 // fps, blit=False)
+    return EpisodeAnimation(fig, anim, fps, n_frames, draw=draw, colors=colors)

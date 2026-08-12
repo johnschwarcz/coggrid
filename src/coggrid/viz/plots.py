@@ -723,7 +723,8 @@ def _wave_at(cfg, waveform: np.ndarray, position: np.ndarray) -> np.ndarray:
 
 
 def _draw_angle(ax, cosine: float, baseline: float, colours: tuple[str, str],
-                tips: tuple[str, str], label: str) -> None:
+                tips: tuple[str, str], label: str,
+                label_color: str = PHASE_COLOR) -> None:
     """Draw one key/query pair as arrows on a unit circle, ``arccos(cosine)`` apart.
 
     The two vectors span a plane and are drawn *in that plane*, so the angle
@@ -742,8 +743,116 @@ def _draw_angle(ax, cosine: float, baseline: float, colours: tuple[str, str],
     arc = np.linspace(baseline, baseline + theta, 60)
     ax.plot(0.45 * np.cos(arc), 0.45 * np.sin(arc), color=PHASE_COLOR, lw=1.4)
     mid = baseline + theta / 2
-    ax.text(0.72 * np.cos(mid), 0.72 * np.sin(mid), label, color=PHASE_COLOR,
+    ax.text(0.72 * np.cos(mid), 0.72 * np.sin(mid), label, color=label_color,
             ha="center", va="center", fontsize=10)
+
+
+def _draw_phase_columns(
+    axes: Sequence[plt.Axes],
+    cfg,
+    waveform: np.ndarray,
+    pattern: np.ndarray,
+    pair: tuple[int, int],
+    colours: tuple[str, str],
+    strengths: tuple[float, float],
+    table: np.ndarray,
+    *,
+    palette: Palette = PALETTE,
+    legend: bool = True,
+    window_anchor: tuple[float, float] = (0.0, 0.0),
+) -> None:
+    """Draw the three columns that follow from the interaction strengths.
+
+    Everything downstream of the embeddings — the phases, the window, the rate
+    table — is a pure function of ``(z_ij, z_ji)``. Sharing it is what keeps the
+    static figure and the animation from drifting apart; only the first column,
+    which draws the vectors themselves, differs between them.
+    """
+    i, j = pair
+    colour_i, colour_j = colours
+    z_ij, z_ji = strengths
+    n_roll, n_r = cfg.n_roll, cfg.n_realizations
+    realizations = np.arange(n_r)
+
+    # ── one waveform, two starting phases
+    ax = axes[0]
+    # Two turns, like the pattern panel: a variable's ten realizations span
+    # ``n_realizations - 1`` slots, and over one turn that run splits in half
+    # whenever it straddles the wrap.
+    turn = np.arange(2 * n_roll * 8) / 8.0
+    ax.plot(turn, _wave_at(cfg, waveform, turn), color="0.4", lw=1.4,
+            label="waveform")
+    ax.axvline(n_roll, color=palette.grid, lw=0.9, ls="--", alpha=0.8)
+    # The two variables read the same curve, so wherever their phases nearly
+    # agree their markers would sit on top of each other and one would vanish.
+    # Nudging them apart is a legibility offset only: both sets lie on the
+    # curve, and the small gap is drawn, not measured.
+    dodge = 0.03 * float(np.ptp(waveform))
+    anchor_i, anchor_j = window_anchor
+    span = n_r - 1
+    for c, z, colour, marker, lift, anchor in (
+        (i, z_ij, colour_i, "o", dodge, anchor_i),
+        (j, z_ji, colour_j, "s", -dodge, anchor_j),
+    ):
+        pos = z * n_roll - realizations
+        # Laid out from the same low corner the window below uses, so the ten
+        # markers stay one contiguous run — on the second copy of the curve when
+        # they would otherwise straddle the wrap — and the two panels agree.
+        low = anchor + np.mod(z * n_roll - span - anchor, n_roll)
+        ax.plot(low + span - realizations, _wave_at(cfg, waveform, pos) + lift,
+                marker, ms=6, color=colour,
+                label=f"var {c}")
+    # Leave room around the curve: autoscaling fits the data exactly, which puts
+    # a peak marker — already nudged by ``dodge`` — right on the frame.
+    low = float(waveform.min()) - dodge
+    high = float(waveform.max()) + dodge
+    ax.set_ylim(low - 0.14 * (high - low), high + 0.14 * (high - low))
+    ax.set_xlim(-0.6, 2 * n_roll + 0.6)
+    ax.set_title("one waveform, two phases", fontsize=10)
+    ax.set_xlabel("phase (slots)", fontsize=9)
+    ax.set_ylabel("potential", fontsize=9)
+    ax.grid(alpha=0.25, color=palette.grid)
+    if legend:
+        ax.legend(fontsize=8, frameon=False, loc="lower right")
+
+    # ── which window of the standard pattern this channel picks
+    ax = axes[1]
+    ax.imshow(pattern.T, origin="lower", cmap="magma", vmin=0.0, vmax=1.0,
+              extent=(0, 2 * n_roll, 0, 2 * n_roll))
+    # The pattern is periodic, so the window's position is only defined modulo a
+    # turn. ``window_anchor`` chooses *which* turn to express it in: the default
+    # 0 gives the usual [0, n_roll) placement, and an animation passes an anchor
+    # that keeps a whole sweep inside one window so the box slides instead of
+    # wrapping abruptly from one edge to the other.
+    lo_i = anchor_i + np.mod(z_ij * n_roll - (n_r - 1) - anchor_i, n_roll)
+    lo_j = anchor_j + np.mod(z_ji * n_roll - (n_r - 1) - anchor_j, n_roll)
+    span = n_r - 1
+    # Each pair of edges is drawn in the colour of the variable whose phase
+    # range it spans, so the box says which axis is which.
+    for offset in (0, span):
+        ax.plot([lo_i, lo_i + span], [lo_j + offset] * 2, color=colour_i, lw=2.4)
+        ax.plot([lo_i + offset] * 2, [lo_j, lo_j + span], color=colour_j, lw=2.4)
+    for edge in (n_roll,):  # where the pattern starts repeating
+        ax.axvline(edge, color="white", lw=0.8, alpha=0.45)
+        ax.axhline(edge, color="white", lw=0.8, alpha=0.45)
+    ax.set_title("the standard pattern (2 turns)", fontsize=10)
+    ax.set_xlabel(f"phase of var {i}", fontsize=9)
+    ax.set_ylabel(f"phase of var {j}", fontsize=9)
+
+    # ── the rate table an observer sees
+    ax = axes[2]
+    ax.imshow(table.T, origin="lower", cmap="magma", vmin=0.0, vmax=1.0)
+    ax.set_title("the rate table", fontsize=10)
+    ax.set_xlabel(f"var {i} realization", fontsize=9)
+    ax.set_ylabel(f"var {j} realization", fontsize=9)
+
+
+def _phase_pattern(cfg, waveform: np.ndarray) -> np.ndarray:
+    """The standard pattern, tiled over two turns so a wrapped window stays one box."""
+    fine = np.arange(cfg.n_roll * 4) / 4.0
+    tile = gen.sigmoid(np.outer(_wave_at(cfg, waveform, fine),
+                                _wave_at(cfg, waveform, fine)))
+    return np.tile(tile, (2, 2))
 
 
 def plot_interaction_phases(
@@ -768,8 +877,11 @@ def plot_interaction_phases(
 
     1. **Embeddings.** The key and query whose angle matters. Both are unit
        vectors, so the cosine of that angle *is* the interaction strength ``z``.
-       Arrow colour says which variable owns the vector; ``z`` is drawn in its
-       own colour because it belongs to neither. Both directions appear, and
+       Arrow colour says which variable owns the vector. The arc is purple
+       because an angle belongs to neither, but its ``z`` label takes the colour
+       of the variable whose phase it sets — the same colour that variable's
+       markers, box edges and table axis carry in the panels to the right, so a
+       strength can be followed all the way through. Both directions appear, and
        they differ — that asymmetry is what stops the joint from being symmetric.
     2. **Phase.** One waveform, read from two starting points. Both variables
        sample the same curve; their strengths only say where to start.
@@ -779,8 +891,7 @@ def plot_interaction_phases(
        stays a single box — one that runs off an edge continues on the next copy.
     4. **The rate table** that window yields.
 
-    Colour means exactly one thing here: **which variable** an element belongs
-    to. Interaction strengths belong to neither, so they get their own colour.
+    Colour means exactly one thing here: **which variable** an element acts on.
     Nothing marks which realization actually occurred — this figure is about how
     the world is built, not about how one episode turned out.
 
@@ -826,9 +937,7 @@ def plot_interaction_phases(
     var_i, var_j = (int(batch.ctx_inds[episode, c]) for c in (i, j))
     colour_i, colour_j = palette.context(i, goal), palette.context(j, goal)
 
-    n_roll, n_r = cfg.n_roll, cfg.n_realizations
     waveform = _standard_waveform(cfg)
-    realizations = np.arange(n_r)
 
     if figsize is None:
         figsize = (15.0, 3.9 * len(channels))
@@ -838,10 +947,7 @@ def plot_interaction_phases(
 
     # The standard pattern is identical in every row — that is the whole claim.
     # Drawn over two turns so a window that crosses the wrap stays one box.
-    fine = np.arange(n_roll * 4) / 4.0
-    tile = gen.sigmoid(np.outer(_wave_at(cfg, waveform, fine),
-                                _wave_at(cfg, waveform, fine)))
-    pattern = np.tile(tile, (2, 2))
+    pattern = _phase_pattern(cfg, waveform)
 
     for row, channel in enumerate(channels):
         # Read from the batch, so the panel cannot drift from the strengths the
@@ -856,9 +962,11 @@ def plot_interaction_phases(
         circle = np.linspace(0, 2 * np.pi, 200)
         ax.plot(np.cos(circle), np.sin(circle), color=palette.grid, lw=1.0, ls=":")
         _draw_angle(ax, z_ij, np.pi / 2, (colour_i, colour_j),
-                    (f"$K_{i}$", f"$Q_{j}$"), f"$z_{{{i}{j}}}$={z_ij:+.2f}")
+                    (f"$K_{i}$", f"$Q_{j}$"), f"$z_{{{i}{j}}}$={z_ij:+.2f}",
+                    label_color=colour_i)
         _draw_angle(ax, z_ji, -np.pi / 2, (colour_j, colour_i),
-                    (f"$K_{j}$", f"$Q_{i}$"), f"$z_{{{j}{i}}}$={z_ji:+.2f}")
+                    (f"$K_{j}$", f"$Q_{i}$"), f"$z_{{{j}{i}}}$={z_ji:+.2f}",
+                    label_color=colour_j)
         ax.set_xlim(-1.55, 1.55), ax.set_ylim(-1.55, 1.55)
         ax.set_aspect("equal"), ax.set_xticks([]), ax.set_yticks([])
         for spine in ax.spines.values():
@@ -866,48 +974,11 @@ def plot_interaction_phases(
         ax.set_title(f"channel {channel}: embeddings", fontsize=10)
         ax.set_xlabel(r"$z = \cos\theta$  (unit vectors)", fontsize=8, color="0.4")
 
-        # ── 2: one waveform, two starting phases
-        ax = axes[row][1]
-        turn = np.arange(n_roll * 8) / 8.0
-        ax.plot(turn, _wave_at(cfg, waveform, turn), color="0.4", lw=1.4,
-                label="standard waveform")
-        for c, other, z, colour, marker in ((i, j, z_ij, colour_i, "o"),
-                                            (j, i, z_ji, colour_j, "s")):
-            pos = z * n_roll - realizations
-            ax.plot(np.mod(pos, n_roll), _wave_at(cfg, waveform, pos), marker,
-                    ms=6, color=colour, label=f"var {c}  (phase $z_{{{c}{other}}}$)")
-        ax.set_title("one waveform, two phases", fontsize=10)
-        ax.set_xlabel("phase (slots)", fontsize=9)
-        ax.set_ylabel("potential", fontsize=9)
-        ax.grid(alpha=0.25, color=palette.grid)
-        ax.legend(fontsize=8, frameon=False, loc="lower right")
-
-        # ── 3: which window of the standard pattern this channel picks
-        ax = axes[row][2]
-        ax.imshow(pattern.T, origin="lower", cmap="magma", vmin=0.0, vmax=1.0,
-                  extent=(0, 2 * n_roll, 0, 2 * n_roll))
-        lo_i = np.mod(z_ij * n_roll - (n_r - 1), n_roll)
-        lo_j = np.mod(z_ji * n_roll - (n_r - 1), n_roll)
-        span = n_r - 1
-        # Each pair of edges is drawn in the colour of the variable whose phase
-        # range it spans, so the box says which axis is which.
-        for offset in (0, span):
-            ax.plot([lo_i, lo_i + span], [lo_j + offset] * 2, color=colour_i, lw=2.4)
-            ax.plot([lo_i + offset] * 2, [lo_j, lo_j + span], color=colour_j, lw=2.4)
-        for edge in (n_roll,):  # where the pattern starts repeating
-            ax.axvline(edge, color="white", lw=0.8, alpha=0.45)
-            ax.axhline(edge, color="white", lw=0.8, alpha=0.45)
-        ax.set_title("the standard pattern (2 turns)", fontsize=10)
-        ax.set_xlabel(f"phase of var {i}", fontsize=9)
-        ax.set_ylabel(f"phase of var {j}", fontsize=9)
-
-        # ── 4: the rate table an observer sees
-        ax = axes[row][3]
+        # ── 2-4: everything the two strengths determine
         table = _pair_slice(batch.rates[episode, channel], i, j, cfg.n_contexts)
-        ax.imshow(table.T, origin="lower", cmap="magma", vmin=0.0, vmax=1.0)
-        ax.set_title("the rate table", fontsize=10)
-        ax.set_xlabel(f"var {i} realization", fontsize=9)
-        ax.set_ylabel(f"var {j} realization", fontsize=9)
+        _draw_phase_columns(axes[row][1:], cfg, waveform, pattern, (i, j),
+                            (colour_i, colour_j), (z_ij, z_ji), table,
+                            palette=palette)
 
     fig.suptitle(
         f"one standard likelihood, translated by the interaction angles  —  "

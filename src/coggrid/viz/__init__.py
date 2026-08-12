@@ -23,6 +23,7 @@ from .animate import (
     EpisodeAnimation,
     EpisodeView,
     animate_episode,
+    animate_interaction_phases,
     default_panels,
     difference_panel,
     joint_posterior_panel,
@@ -58,6 +59,7 @@ from .style import PALETTE, Palette, label_axes, transparent_cmap
 __all__ = [
     # animation
     "animate_episode",
+    "animate_interaction_phases",
     "EpisodeAnimation",
     "EpisodeView",
     "DEFAULT_PANELS",
