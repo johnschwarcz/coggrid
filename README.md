@@ -30,7 +30,7 @@ Top: the optimal and naive observers' posteriors and their difference. Bottom: A
 </p>
 
 The joint observer is more likely to identify the goal variable correctly. 
-When their posteriors diverge, the naive observer is likely to be wrong. 
+When their posteriors diverge, the naive observer becomes unreliable. 
 The naive observer is not just noisier, but it can become misaligned.
 
 ```python
