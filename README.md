@@ -37,6 +37,17 @@ The naive observer is not just noisier, but it can become misaligned.
 
 ## How the environment works
 
+```python
+from coggrid import CogGridConfig, World
+from coggrid.viz import animate_interaction_phases, plot_interaction_phases
+
+world = World(CogGridConfig(n_vars=500, n_contexts=2, seed=0))
+batch = world.sample_episodes(2000)
+
+plot_interaction_phases(world, batch, episode=0, channels=(0,))
+animate_interaction_phases(world, batch, episode=0)
+```
+
 Each episode:
 
 1. **Contexts.** `n_contexts` latent variables are drawn from a pool of `n_vars`.
@@ -54,16 +65,6 @@ The inner product of one variable's key with the other's query sets a *phase* th
   <img src="docs/images/interaction_phases.png" alt="Variable embeddings, the inner products they produce, and the standard likelihood pattern those phases translate" width="100%">
 </p>
 
-```python
-from coggrid import CogGridConfig, World
-from coggrid.viz import animate_interaction_phases, plot_interaction_phases
-
-world = World(CogGridConfig(n_vars=500, n_contexts=2, seed=0))
-batch = world.sample_episodes(2000)
-
-plot_interaction_phases(world, batch, episode=0, channels=(0,))
-animate_interaction_phases(world, batch, episode=0)
-```
 
 Reading left to right:
 1. **Embeddings.** Each latent variable carries a **key** and a **query** vector
@@ -83,6 +84,12 @@ Note: This is meant to demonstrate how embeddings impact the likelihood. Embeddi
 
 ### What a single observation actually says
 
+```python
+from coggrid.viz import plot_evidence_likelihood
+
+plot_evidence_likelihood(batch, episode=0)
+```
+
 The agent sees a **vector** of
 `n_observations`  at once, and its likelihood is the product of the
 per-channel rates.
@@ -91,11 +98,6 @@ per-channel rates.
   <img src="docs/images/evidence_likelihood.png" alt="Per-channel rate tables, and the posterior induced by every possible observation vector" width="100%">
 </p>
 
-```python
-from coggrid.viz import plot_evidence_likelihood
-
-plot_evidence_likelihood(batch, episode=0)
-```
 
 The top row is the per-channel joint likelihoods.
 The grid below is every possible observation vector and the belief update it induces.
