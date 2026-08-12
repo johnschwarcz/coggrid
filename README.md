@@ -55,7 +55,11 @@ The inner product of one variable's key with the other's query sets a *phase* th
 </p>
 
 ```python
+from coggrid import CogGridConfig, World
 from coggrid.viz import animate_interaction_phases, plot_interaction_phases
+
+world = World(CogGridConfig(n_vars=500, n_contexts=2, seed=0))
+batch = world.sample_episodes(2000)
 
 plot_interaction_phases(world, batch, episode=0, channels=(0,))
 animate_interaction_phases(world, batch, episode=0)
