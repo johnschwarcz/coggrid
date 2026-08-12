@@ -17,8 +17,7 @@ An example episode:
 </p>
 
 <p align="center"><em>
-Top: the optimal observer's posterior, the naive observer's posterior, and where
-they disagree. Bottom: A stream of observations.
+Top: the optimal and naive observers' posteriors and their difference. Bottom: A stream of observations.
 </em></p>
 
 
@@ -30,8 +29,9 @@ they disagree. Bottom: A stream of observations.
   <img src="docs/images/regret_analysis.png" alt="Factorization regret predicts the naive observer's failures but not the joint observer's" width="100%">
 </p>
 
-**Factorization regret** — `D_KL(B_joint ‖ B_naive)` 
-([§3.1](https://arxiv.org/abs/2603.27134)) — measures the cost of factorizing inference of interacting latent variables.
+The joint observer is more likely to identify the goal variable correctly. 
+When their posteriors diverge, the naive observer is likely to be wrong. 
+The naive observer is not just noisier, but it can become misaligned.
 
 ```python
 from coggrid import CogGridConfig, World, run_observers
@@ -44,6 +44,9 @@ traces = run_observers(batch)
 factorization_regret(traces["joint"], traces["naive"])   # (n_episodes, n_steps)
 disentanglement(traces["joint"], traces["naive"], batch) # (n_episodes, n_steps)
 ```
+
+**Factorization regret** — `D_KL(B_joint ‖ B_naive)` 
+([§3.1](https://arxiv.org/abs/2603.27134)) — measures the cost of factorizing inference of interacting latent variables.
 
 **Dis-entanglement** ([§B.3](https://arxiv.org/abs/2603.27134)) quantifies the 'history-dependence' of an observation, 
 by measuring the divergence between the naive marginal belief update `p(o_t | r)` 
@@ -122,10 +125,6 @@ traces = run_observers(batch)
 traces["joint"].final()   # {'accuracy': ..., 'p_correct': ..., 'mse': ...}
 traces["naive"].final()   # the same three, for the factorized observer
 ```
-
-The joint observer is more likely to identify the goal variable correctly. 
-When the naive observer disagrees with the joint observer, it is likely to be wrong. 
-The naive observer is not just noisier, but can become misaligned.
 
 ## Install
 
