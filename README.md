@@ -33,26 +33,6 @@ The joint observer is more likely to identify the goal variable correctly.
 When their posteriors diverge, the naive observer becomes unreliable. 
 The naive observer is not just noisier, but it can become misaligned.
 
-```python
-from coggrid import CogGridConfig, World, run_observers
-from coggrid import factorization_regret, disentanglement
-
-world = World(CogGridConfig(n_vars=500, n_contexts=2, seed=0))
-batch = world.sample_episodes(2000)
-traces = run_observers(batch)
-
-factorization_regret(traces["joint"], traces["naive"])   # (n_episodes, n_steps)
-disentanglement(traces["joint"], traces["naive"], batch) # (n_episodes, n_steps)
-```
-
-**Factorization regret** — `D_KL(B_joint ‖ B_naive)` 
-([§3.1](https://arxiv.org/abs/2603.27134)) — measures the cost of factorizing inference of interacting latent variables.
-
-**Dis-entanglement** ([§B.3](https://arxiv.org/abs/2603.27134)) quantifies the 'history-dependence' of an observation, 
-by measuring the divergence between the naive marginal belief update `p(o_t | r)` 
-and the optimal marginal belief update `p(o_t | r, o_1:t-1)`. 
-It is zero when marginal belief dynamics are Markovian.
-
 ---
 
 ## How the environment works
@@ -173,6 +153,27 @@ pytest
 Both run in log space with a cumulative sum rather than a per-step
 multiply-and-renormalize, so neither underflows at long horizons (tested to
 `n_steps=4000`).
+
+```python
+from coggrid import CogGridConfig, World, run_observers
+from coggrid import factorization_regret, disentanglement
+
+world = World(CogGridConfig(n_vars=500, n_contexts=2, seed=0))
+batch = world.sample_episodes(2000)
+traces = run_observers(batch)
+
+factorization_regret(traces["joint"], traces["naive"])   # (n_episodes, n_steps)
+disentanglement(traces["joint"], traces["naive"], batch) # (n_episodes, n_steps)
+```
+
+**Factorization regret** — `D_KL(B_joint ‖ B_naive)` 
+([§3.1](https://arxiv.org/abs/2603.27134)) — measures the cost of factorizing inference of interacting latent variables.
+
+**Dis-entanglement** ([§B.3](https://arxiv.org/abs/2603.27134)) quantifies the 'history-dependence' of an observation, 
+by measuring the divergence between the naive marginal belief update `p(o_t | r)` 
+and the optimal marginal belief update `p(o_t | r, o_1:t-1)`. 
+It is zero when marginal belief dynamics are Markovian.
+
 
 ### Train / held-out splits
 
