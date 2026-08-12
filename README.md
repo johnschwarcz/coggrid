@@ -18,7 +18,7 @@ An example episode:
 
 <p align="center"><em>
 Top: the optimal observer's posterior, the naive observer's posterior, and where
-they disagree. Bottom: A continual stream of observations.
+they disagree. Bottom: A stream of observations.
 </em></p>
 
 
@@ -46,9 +46,9 @@ disentanglement(traces["joint"], traces["naive"], batch) # (n_episodes, n_steps)
 ```
 
 **Dis-entanglement** ([§B.3](https://arxiv.org/abs/2603.27134)) quantifies the 'history-dependence' of an observation, 
-by measuring the Jeffreys divergence between the naive marginal belief update `p(o_t | r)` 
+by measuring the divergence between the naive marginal belief update `p(o_t | r)` 
 and the optimal marginal belief update `p(o_t | r, o_1:t-1)`. 
-It is zero when the marginal belief dynamics are Markovian.
+It is zero when marginal belief dynamics are Markovian.
 
 ---
 
@@ -58,17 +58,15 @@ Each episode:
 
 1. **Contexts.** `n_contexts` latent variables are drawn from a pool of `n_vars`.
    One is designated the **goal**.
-2. **Realizations.** Each variable in the context takes one of `n_realizations` discrete
-   values. The goal variable's value is what must be inferred.
-3. **Likelihood.** Every *pair* of active variables contributes an interaction
-   potential built from their key/query embeddings. The potentials are summed and
-   squashed, giving a Bernoulli rate per observation channel — one rate for each
-   hypothetical joint realization.
-4. **Observations.** The agent sees `n_steps` i.i.d. samples from those rates.
+2. **Realizations.** Each "active" variable in the context takes one of `n_realizations` discrete
+   values.
+3. **Likelihood.** Active variables interact through their key/query embeddings.
+   Interactions are then expanded to an `n_realizations`^`n_contexts` likelihood.
+5. **Observations.** `n_steps` i.i.d. observations sampled stochastically from the likelihood / prob. of observing 1 aka 1 - prob. of observing 0.
 
-### Interactions are phase shifts of one standard likelihood
+### Interactions shift the joint likelihood in latent space
 
-The inner product of one variable's key with the other's query sets a *phase* that translates the pattern.
+The inner product of one variable's key with the other's query sets a *phase* that translates an "XOR"-like pattern.
 
 <p align="center">
   <img src="docs/images/interaction_phases.png" alt="Variable embeddings, the inner products they produce, and the standard likelihood pattern those phases translate" width="100%">
@@ -82,27 +80,16 @@ plot_interaction_phases(world, batch, episode=0, channels=(0, 1))
 Reading left to right:
 1. **Embeddings.** Each latent variable carries a **key** and a **query** vector
    per channel. Both are unit vectors, so the cosine of the angle between one
-   variable's key and the other's query *is* the interaction strength `z`. Arrow
-   colour says which variable owns the vector; `z` has its own colour because it
-   belongs to neither. Both directions are drawn — `z₀₁` and `z₁₀` — and they
-   differ, which is what stops the joint from being symmetric. The arrows sit in
-   the plane the two vectors actually span, so the angle you see is the real one,
-   not a projection of it.
-2. **Phase.** The potential over realizations is a single sinusoid shifted by
-   `−2π · likelihood_freq · z`. Both variables read the *same* waveform; their
-   strengths only say where to start.
-3. **The standard pattern**, with the window this channel selects. Each pair of
-   box edges takes the colour of the variable whose phase range it spans. Phase
-   is periodic, so the pattern is drawn over two turns: a window that runs off
-   one edge continues on the next copy, and stays a single box.
-4. **The rate table** that window yields.
+   variable's key and the other's query gives a score `z`. 
+2. **Phase.**  Each score shifts a standard sinusoid by `−2π · likelihood_freq · z`. 
+3. **The standard pattern**, Sinasoids are expanded to a repeating pattern through an outer product.
+4. **The selected pattern**  A specific pair of scores defines a specific region of the pattern.
 
 ### What a single observation actually says
 
 The agent sees a **vector** of
-`n_observations` bits at once, and its likelihood is the product of the
-per-channel rates — each channel's rate where that bit is 1, its complement
-where the bit is 0.
+`n_observations`  at once, and its likelihood is the product of the
+per-channel rates.
 
 <p align="center">
   <img src="docs/images/evidence_likelihood.png" alt="Per-channel rate tables, and the posterior induced by every possible observation vector" width="100%">
