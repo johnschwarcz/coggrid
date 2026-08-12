@@ -7,14 +7,9 @@
 
 A stationary POMDP for studying **compositional generalization in latent space** —
 the environment and ideal-observer baselines from
-[arXiv:2603.27134](https://arxiv.org/abs/2603.27134), packaged to drop into your
-own training loop.
+[arXiv:2603.27134](https://arxiv.org/abs/2603.27134).
 
-> **The navigation is in abstract space.**
-
-Latent variables interact *pairwise* to produce observation statistics, so the
-observation distribution does not factorize over them. An agent that represents
-the latent space as independent factors is therefore provably lossy.
+> **Bayesian inference is represented as navigating a latent space.**
 
 An example episode:
 <p align="center">
@@ -23,7 +18,7 @@ An example episode:
 
 <p align="center"><em>
 Top: the optimal observer's posterior, the naive observer's posterior, and where
-they disagree. Bottom: the evidence stream.
+they disagree. Bottom: A continual stream of observations.
 </em></p>
 
 
@@ -50,8 +45,10 @@ factorization_regret(traces["joint"], traces["naive"])   # (n_episodes, n_steps)
 disentanglement(traces["joint"], traces["naive"], batch) # (n_episodes, n_steps)
 ```
 
-**Dis-entanglement** ([§B.3](https://arxiv.org/abs/2603.27134)) is the Jeffreys divergence between the naive marginal likelihood
-`p(o_t | r)` and the history-dependent one `p(o_t | r, o_1:t-1)`. It is zero when the marginal belief dynamics are Markovian.
+**Dis-entanglement** ([§B.3](https://arxiv.org/abs/2603.27134)) quantifies the 'history-dependence' of an observation, 
+by measuring the Jeffreys divergence between the naive marginal belief update `p(o_t | r)` 
+and the optimal marginal belief update `p(o_t | r, o_1:t-1)`. 
+It is zero when the marginal belief dynamics are Markovian.
 
 ---
 
@@ -61,7 +58,7 @@ Each episode:
 
 1. **Contexts.** `n_contexts` latent variables are drawn from a pool of `n_vars`.
    One is designated the **goal**.
-2. **Realizations.** Each active variable takes one of `n_realizations` discrete
+2. **Realizations.** Each variable in the context takes one of `n_realizations` discrete
    values. The goal variable's value is what must be inferred.
 3. **Likelihood.** Every *pair* of active variables contributes an interaction
    potential built from their key/query embeddings. The potentials are summed and
