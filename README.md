@@ -60,8 +60,7 @@ Each episode:
    One is designated the **goal**.
 2. **Realizations.** Each "active" variable in the context takes one of `n_realizations` discrete
    values.
-3. **Likelihood.** Active variables interact through their key/query embeddings.
-   Interactions are then expanded to an `n_realizations`^`n_contexts` likelihood.
+3. **Likelihood.** Active variables interact through key/query embeddings which map to an `n_realizations`^`n_contexts` likelihood.
 5. **Observations.** `n_steps` i.i.d. observations sampled stochastically from the likelihood / prob. of observing 1 aka 1 - prob. of observing 0.
 
 ### Interactions shift the joint likelihood in latent space
@@ -79,8 +78,7 @@ plot_interaction_phases(world, batch, episode=0, channels=(0, 1))
 ```
 Reading left to right:
 1. **Embeddings.** Each latent variable carries a **key** and a **query** vector
-   per channel. Both are unit vectors, so the cosine of the angle between one
-   variable's key and the other's query gives a score `z`. 
+   per channel. The angle between one variable's key and the other's query gives a score `z`. 
 2. **Phase.**  Each score shifts a standard sinusoid by `−2π · likelihood_freq · z`. 
 3. **The standard pattern**, Sinasoids are expanded to a repeating pattern through an outer product.
 4. **The selected pattern**  A specific pair of scores defines a specific region of the pattern.
@@ -101,9 +99,8 @@ from coggrid.viz import plot_evidence_likelihood
 plot_evidence_likelihood(batch, episode=0)
 ```
 
-The top row is the per-channel tables.
-The grid below is every observation vector the agent could receive, and the
-posterior each one induces from a uniform prior. 
+The top row is the per-channel joint likelihoods.
+The grid below is every possible observation vector and the belief update it induces.
 
 
 ## Quickstart
@@ -119,10 +116,9 @@ traces["joint"].final()   # {'accuracy': ..., 'p_correct': ..., 'mse': ...}
 traces["naive"].final()   # the same three, for the factorized observer
 ```
 
-The joint observer lands **far ahead** — on the default config it is close to
-twice as likely to identify the goal variable correctly. That gap is the cost of
-a factorized representation, and it is the only thing separating the two: they
-see identical evidence and differ solely in whether they model the interaction.
+The joint observer is more likely to identify the goal variable correctly. 
+When the naive observer disagrees with the joint observer, it is likely to be wrong. 
+The naive observer is not just noisier, but can become misaligned.
 
 ## Install
 
@@ -143,9 +139,7 @@ pytest
 
 ### Every knob
 
-`CogGridConfig` holds the whole specification of a world. Nothing else configures
-the environment, and it is validated on construction, so an impossible
-combination fails immediately rather than producing quiet nonsense.
+`CogGridConfig` holds the whole specification of a world. 
 
 | Field | Default | Meaning |
 | --- | --- | --- |
@@ -183,7 +177,7 @@ world.sample_episodes(1000, split="held_out")   # every active variable novel
 
 `"train"` is the condition under which a subset of the variables are never the
 goal and never co-occur. `"held_out"` is the condition where no variable in the
-episode has been a goal, nor co-occurred, during training.
+episode has been a goal, nor co-occurred, during training. This is specifically relevant for training and evaluating networks.
 
 ---
 
@@ -211,17 +205,13 @@ for _ in range(env.cfg.n_steps):
 from experience is the point of the task. At test time those indices have never
 been seen.
 
-**Action** — `Discrete(n_realizations)`: your current guess at the goal
-variable's value. Actions do not affect the observation stream; the agent is a
-decoder, not a controller. Guessing every step is what makes the
-accuracy-versus-time curves well defined.
+**Action** — `Discrete(n_realizations)`: the agent's current guess (MAP) of the goal
+variable's value.
 
 **Reward** — 1.0 for a correct guess, every step (`reward_mode="dense"`) or only
 on the last step (`reward_mode="terminal"`).
 
-Episodes end with `terminated=True`, not `truncated=True`: the horizon *is* the
-task ("decode from exactly `n_steps` samples"), not an externally imposed limit,
-so there is no value left to bootstrap.
+Episodes end with `terminated=True`, not `truncated=True`.
 
 `coggrid.env.register()` adds `CogGrid-v0` to the Gymnasium registry.
 
