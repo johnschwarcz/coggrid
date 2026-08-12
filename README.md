@@ -9,7 +9,7 @@ A stationary POMDP for studying **compositional generalization in latent space**
 the environment and ideal-observer baselines from
 [arXiv:2603.27134](https://arxiv.org/abs/2603.27134).
 
-> **Bayesian inference is represented as navigating a latent space.**
+> **Sequential Bayesian inference is represented as navigating a latent space.**
 
 An example episode:
 <p align="center">
