@@ -81,6 +81,6 @@ if __name__ == "__main__":
         anim = CogGridConfig(
             n_vars=500, n_contexts=2, n_realizations=10, n_steps=30, seed=seed)
         W = World(anim).sample_episodes(1)
-        clip = animate_episode(W, run_observers(W), extended=False, fps=6)
+        clip = animate_episode(W, run_observers(W), extended=False, fps=10)
         path = clip.save(args.out / f"episode_animation_{n}")
         print("wrote", path, f"({path.stat().st_size / 1e3:.0f} kB)")
