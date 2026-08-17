@@ -15,7 +15,7 @@ cfg = CogGridConfig(
 )
 print(cfg)
 print()
-print(cfg.memory_report(n_episodes=2000))
+print(cfg.memory_report(batch_size=2000))
 print()
 
 world = World(cfg)

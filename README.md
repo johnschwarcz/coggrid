@@ -147,7 +147,7 @@ pytest
 | `embedding_dim` | 30 | Length of each key/query vector. Must be ≥ `n_observations`, since they are orthogonalized across channels. |
 | `likelihood_temp` | 2.0 | Scales the potentials before the sigmoid. Higher pushes rates towards 0/1, making single observations more informative. |
 | `likelihood_freq` | 1.0 | Periods in the value profile. Higher partitions the realization axis more finely. |
-| `n_episodes` | 1000 | Default batch size for `sample_episodes`. |
+| `batch_size` | 1000 | Default batch size for `sample_episodes`. |
 | `n_held_out_vars` | `None` | Size of the held-out pool. `None` means `n_vars // 10`. Held-out variables are `range(n_held_out_vars)`. |
 | `subsample_vars` | `None` | If set, draw contexts from a random subset of this size within each split. |
 | `allow_repeated_vars` | `True` | Whether one episode may activate the same variable twice. |
@@ -172,8 +172,8 @@ world = World(CogGridConfig(n_vars=500, n_contexts=2, seed=0))
 batch = world.sample_episodes(2000)
 traces = run_observers(batch)
 
-factorization_regret(traces["joint"], traces["naive"])   # (n_episodes, n_steps)
-disentanglement(traces["joint"], traces["naive"], batch) # (n_episodes, n_steps)
+factorization_regret(traces["joint"], traces["naive"])   # (batch_size, n_steps)
+disentanglement(traces["joint"], traces["naive"], batch) # (batch_size, n_steps)
 ```
 
 **Factorization regret** — `D_KL(B_joint ‖ B_naive)` 
@@ -379,7 +379,7 @@ can be unit-tested on its own.
 
 ## Memory
 
-The joint likelihood is `n_episodes x n_observations x n_realizations ** n_contexts`.
+The joint likelihood is `batch_size x n_observations x n_realizations ** n_contexts`.
 That last term grows fast, so check before you run:
 
 ```python

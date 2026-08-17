@@ -56,7 +56,7 @@ class CogGridConfig:
     likelihood_freq:
         Number of periods in the sinusoidal value profile. Higher values make
         the mapping from interaction strength to realization multimodal.
-    n_episodes:
+    batch_size:
         Default batch size for :meth:`~coggrid.World.sample_episodes`.
     n_held_out_vars:
         Size of the held-out ("test") slice of the variable pool. ``None`` means
@@ -80,7 +80,7 @@ class CogGridConfig:
     embedding_dim: int = 30
     likelihood_temp: float = 2.0
     likelihood_freq: float = 1.0
-    n_episodes: int = 1000
+    batch_size: int = 1000
     n_held_out_vars: int | None = None
     subsample_vars: int | None = None
     allow_repeated_vars: bool = True
@@ -95,7 +95,7 @@ class CogGridConfig:
             "n_observations": self.n_observations,
             "n_steps": self.n_steps,
             "embedding_dim": self.embedding_dim,
-            "n_episodes": self.n_episodes,
+            "batch_size": self.batch_size,
         }
         for name, value in positive.items():
             if not isinstance(value, (int, np.integer)) or value < 1:
@@ -175,12 +175,12 @@ class CogGridConfig:
         """Shape of the joint realization axes: ``(n_realizations,) * n_contexts``."""
         return (self.n_realizations,) * self.n_contexts
 
-    def joint_likelihood_shape(self, n_episodes: int | None = None) -> tuple[int, ...]:
+    def joint_likelihood_shape(self, batch_size: int | None = None) -> tuple[int, ...]:
         """Shape of the joint likelihood table for a batch."""
-        n = self.n_episodes if n_episodes is None else n_episodes
+        n = self.batch_size if batch_size is None else batch_size
         return (n, self.n_observations, *self.realization_shape)
 
-    def memory_report(self, n_episodes: int | None = None) -> str:
+    def memory_report(self, batch_size: int | None = None) -> str:
         """Human-readable estimate of the dominant allocation.
 
         ``n_realizations ** n_contexts`` grows fast; this is the number people
@@ -194,7 +194,7 @@ class CogGridConfig:
           joint belief     : 35.8 GiB
           peak (approx)    : 41.7 GiB
         """
-        n = self.n_episodes if n_episodes is None else n_episodes
+        n = self.batch_size if batch_size is None else batch_size
         table = int(np.prod(self.joint_likelihood_shape(n), dtype=np.int64)) * 8
         belief = table * self.n_steps / self.n_observations
 
@@ -214,15 +214,15 @@ class CogGridConfig:
         )
 
     def warn_if_large(
-        self, n_episodes: int | None = None, limit_gib: float = 2.0
+        self, batch_size: int | None = None, limit_gib: float = 2.0
     ) -> None:
         """Emit a ``ResourceWarning`` when the joint table is likely to hurt."""
-        shape = self.joint_likelihood_shape(n_episodes)
+        shape = self.joint_likelihood_shape(batch_size)
         if int(np.prod(shape, dtype=np.int64)) * 8 > limit_gib * 1024**3:
             warnings.warn(
                 "CogGrid joint likelihood is large:\n"
-                + self.memory_report(n_episodes)
-                + "\nReduce n_episodes, n_contexts or n_realizations, or sample "
+                + self.memory_report(batch_size)
+                + "\nReduce batch_size, n_contexts or n_realizations, or sample "
                 "in chunks.",
                 ResourceWarning,
                 stacklevel=3,

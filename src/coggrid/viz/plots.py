@@ -505,7 +505,7 @@ def _draw_band(
 ) -> None:
     """Individual episode trajectories, then mean +/- SD, then the mean on top.
 
-    ``data`` is ``(n_episodes, n_steps)``. The single-episode lines are what stop
+    ``data`` is ``(batch_size, n_steps)``. The single-episode lines are what stop
     a tidy mean curve from hiding a bimodal or heavy-tailed distribution.
 
     A per-episode 0/1 indicator (``accuracy``) is the exception: its trajectories
@@ -551,8 +551,8 @@ def plot_performance(
         raise ValueError("no metrics left to plot")
 
     rng = rng or np.random.default_rng(0)
-    n_episodes, n_steps = trace_list[0].accuracy.shape
-    picks = rng.choice(n_episodes, size=min(n_samples, n_episodes), replace=False)
+    batch_size, n_steps = trace_list[0].accuracy.shape
+    picks = rng.choice(batch_size, size=min(n_samples, batch_size), replace=False)
 
     if axes is None:
         figsize = figsize or (4.0 * len(columns), 3.6)
@@ -587,7 +587,7 @@ def plot_performance(
         ax.grid(alpha=0.25, color=palette.grid)
         ax.legend(fontsize=9)
 
-    fig.suptitle(f"observer performance ({n_episodes} episodes)", fontsize=12)
+    fig.suptitle(f"observer performance ({batch_size} episodes)", fontsize=12)
     fig.tight_layout()
     return fig
 

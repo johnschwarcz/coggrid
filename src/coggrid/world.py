@@ -46,30 +46,30 @@ EmbeddingSource = Callable[
     [CogGridConfig, np.random.Generator], tuple[np.ndarray, np.ndarray]
 ]
 
-#: ``(cfg, rng, split, n_episodes) -> (ctx_inds, goal_ind)`` of shapes
-#: ``(n_eps, n_ctx)`` and ``(n_eps,)``. Changes which variables are active and
+#: ``(cfg, rng, split, batch_size) -> (ctx_inds, goal_ind)`` of shapes
+#: ``(batch_size, n_ctx)`` and ``(batch_size,)``. Changes which variables are active and
 #: how the train/held-out split is structured.
 ContextSampler = Callable[
     [CogGridConfig, np.random.Generator, Split, int], tuple[np.ndarray, np.ndarray]
 ]
 
 #: ``(cfg, keys, queries, ctx_inds) -> (rates, interactions)``. ``rates`` is
-#: ``(n_eps, n_obs, *(n_realizations,) * n_contexts)`` and must lie strictly
-#: inside ``(0, 1)``; ``interactions`` is any ``(n_eps, n_obs, k)`` diagnostic
+#: ``(batch_size, n_obs, *(n_realizations,) * n_contexts)`` and must lie strictly
+#: inside ``(0, 1)``; ``interactions`` is any ``(batch_size, n_obs, k)`` diagnostic
 #: array, carried for analysis and never read by the observers. Changes the
 #: *form* of the interaction — e.g. adding a three-way term.
 LikelihoodModel = Callable[
     [CogGridConfig, np.ndarray, np.ndarray, np.ndarray], tuple[np.ndarray, np.ndarray]
 ]
 
-#: ``(cfg, rng, goal_ind, n_episodes) -> (ctx_vals, goal_value)``. Changes the
+#: ``(cfg, rng, goal_ind, batch_size) -> (ctx_vals, goal_value)``. Changes the
 #: prior over latent values.
 RealizationSampler = Callable[
     [CogGridConfig, np.random.Generator, np.ndarray, int], tuple[np.ndarray, np.ndarray]
 ]
 
 #: ``(cfg, rates, ctx_vals, rng) -> (true_rates, observations)``, shapes
-#: ``(n_eps, n_obs)`` and boolean ``(n_eps, n_steps, n_obs)``. Changes the
+#: ``(batch_size, n_obs)`` and boolean ``(batch_size, n_steps, n_obs)``. Changes the
 #: observations to non-stationary, correlated or continuous — note the built-in
 #: observers assume i.i.d. Bernoulli, so this generally needs a matching observer.
 ObservationModel = Callable[
@@ -121,7 +121,7 @@ class EpisodeBatch:
     """One batch of episodes, fully specified.
 
     Everything an observer, an agent wrapper or a plotting function needs, and
-    nothing else. All arrays share a leading ``n_episodes`` axis.
+    nothing else. All arrays share a leading ``batch_size`` axis.
 
     Attributes
     ----------
@@ -130,28 +130,28 @@ class EpisodeBatch:
     split:
         Which variable pool the contexts came from.
     ctx_inds:
-        ``(n_episodes, n_contexts)`` indices of the active latent variables, sorted.
+        ``(batch_size, n_contexts)`` indices of the active latent variables, sorted.
     goal_ind:
-        ``(n_episodes,)`` which column of ``ctx_inds`` the agent is scored on.
+        ``(batch_size,)`` which column of ``ctx_inds`` the agent is scored on.
     ctx_vals:
-        ``(n_episodes, n_contexts)`` the realization each active variable took.
+        ``(batch_size, n_contexts)`` the realization each active variable took.
     goal_value:
-        ``(n_episodes,)`` the realization of the goal variable — the quantity to
+        ``(batch_size,)`` the realization of the goal variable — the quantity to
         be inferred.
     rates:
-        ``(n_episodes, n_observations, *(n_realizations,) * n_contexts)``
+        ``(batch_size, n_observations, *(n_realizations,) * n_contexts)``
         Bernoulli rates for every hypothetical joint realization. This is the
         likelihood function an ideal observer has access to.
     marginal_rates:
-        ``(n_episodes, n_observations, n_contexts, n_realizations)`` the same
+        ``(batch_size, n_observations, n_contexts, n_realizations)`` the same
         thing after wrongly assuming the active variables are independent.
     true_rates:
-        ``(n_episodes, n_observations)`` the rate that actually generated the
+        ``(batch_size, n_observations)`` the rate that actually generated the
         observations, i.e. ``rates`` indexed at ``ctx_vals``.
     observations:
-        ``(n_episodes, n_steps, n_observations)`` boolean observation stream.
+        ``(batch_size, n_steps, n_observations)`` boolean observation stream.
     interactions:
-        ``(n_episodes, n_observations, k)`` raw interaction strengths, one per
+        ``(batch_size, n_observations, k)`` raw interaction strengths, one per
         ordered pair of active variables. Kept for analysis.
     """
 
@@ -169,7 +169,7 @@ class EpisodeBatch:
 
     # ------------------------------------------------------------------ shape
     @property
-    def n_episodes(self) -> int:
+    def batch_size(self) -> int:
         return int(self.ctx_inds.shape[0])
 
     @property
@@ -177,11 +177,11 @@ class EpisodeBatch:
         return int(self.observations.shape[1])
 
     def __len__(self) -> int:
-        return self.n_episodes
+        return self.batch_size
 
     def __repr__(self) -> str:  # pragma: no cover - cosmetic
         return (
-            f"EpisodeBatch(n_episodes={self.n_episodes}, split={self.split!r}, "
+            f"EpisodeBatch(batch_size={self.batch_size}, split={self.split!r}, "
             f"n_contexts={self.cfg.n_contexts}, "
             f"n_realizations={self.cfg.n_realizations}, "
             f"n_observations={self.cfg.n_observations}, n_steps={self.n_steps})"
@@ -329,7 +329,7 @@ class World:
     # ---------------------------------------------------------------- sampling
     def sample_episodes(
         self,
-        n_episodes: int | None = None,
+        batch_size: int | None = None,
         *,
         split: Split = "held_out",
         rng: int | np.random.Generator | None = None,
@@ -338,8 +338,8 @@ class World:
 
         Parameters
         ----------
-        n_episodes:
-            Batch size. Defaults to ``cfg.n_episodes``.
+        batch_size:
+            How many episodes to draw. Defaults to ``cfg.batch_size``.
         split:
             ``"held_out"`` (all active variables novel) or ``"train"`` (at most one
             novel variable, goal always familiar). See
@@ -350,9 +350,9 @@ class World:
             world.
         """
         cfg = self.cfg
-        n = cfg.n_episodes if n_episodes is None else int(n_episodes)
+        n = cfg.batch_size if batch_size is None else int(batch_size)
         if n < 1:
-            raise ValueError(f"n_episodes must be >= 1, got {n}")
+            raise ValueError(f"batch_size must be >= 1, got {n}")
         cfg.warn_if_large(n)
 
         batch_rng = self.rng if rng is None else cfg.rng(rng)

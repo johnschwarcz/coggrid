@@ -38,14 +38,14 @@ else:
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(allow_abbrev=False)
     parser.add_argument("--out", type=Path, default=ROOT / "docs" / "images")
-    parser.add_argument("--episodes", type=int, default=15000)
+    parser.add_argument("--batch-size", type=int, default=15000)
     args, _ignored = parser.parse_known_args()
     args.out.mkdir(parents=True, exist_ok=True)
     
     
     cfg = CogGridConfig(n_vars=500, n_contexts=2, n_realizations=10, seed=4)
     world = World(cfg)
-    batch = world.sample_episodes(args.episodes)
+    batch = world.sample_episodes(args.batch_size)
     traces = run_observers(batch)
 
     for name, fig in (

@@ -10,13 +10,13 @@ The pipeline, in order:
 .. code-block:: text
 
     orthonormal_embeddings   ->  K, Q                 (n_vars, n_obs, dim)
-    sample_contexts          ->  ctx_inds, goal_ind   (n_eps, n_ctx)
+    sample_contexts          ->  ctx_inds, goal_ind   (batch_size, n_ctx)
     value_profile            ->  profile              (n_realizations, n_roll)
-    joint_likelihood         ->  rates, interactions  (n_eps, n_obs, R, ..., R)
-    marginal_likelihood      ->  factorized rates     (n_eps, n_obs, n_ctx, R)
-    sample_realizations      ->  ctx_vals, goal_value (n_eps, n_ctx)
-    observation_rates        ->  p(obs=1)             (n_eps, n_obs)
-    sample_observations      ->  observations         (n_eps, n_steps, n_obs)
+    joint_likelihood         ->  rates, interactions  (batch_size, n_obs, R, ..., R)
+    marginal_likelihood      ->  factorized rates     (batch_size, n_obs, n_ctx, R)
+    sample_realizations      ->  ctx_vals, goal_value (batch_size, n_ctx)
+    observation_rates        ->  p(obs=1)             (batch_size, n_obs)
+    sample_observations      ->  observations         (batch_size, n_steps, n_obs)
 """
 
 from __future__ import annotations
@@ -164,8 +164,8 @@ def interaction_strength(
     """Inner product between the key of active variable ``i`` and the query of ``j``.
 
     ``active_keys`` / ``active_queries`` have shape
-    ``(n_episodes, n_contexts, n_observations, embedding_dim)``; the result has
-    shape ``(n_episodes, n_observations)``.
+    ``(batch_size, n_contexts, n_observations, embedding_dim)``; the result has
+    shape ``(batch_size, n_observations)``.
 
     Note this is *asymmetric*: ``(i, j)`` and ``(j, i)`` give different numbers,
     which is what lets a pair of variables produce an anisotropic joint
@@ -192,19 +192,19 @@ def joint_likelihood(
     keys, queries:
         ``(n_vars, n_observations, embedding_dim)`` embeddings.
     ctx_inds:
-        ``(n_episodes, n_contexts)`` indices of the active latent variables.
+        ``(batch_size, n_contexts)`` indices of the active latent variables.
     profile:
         Optional precomputed :func:`value_profile` output.
 
     Returns
     -------
     rates:
-        ``(n_episodes, n_observations, n_realizations, ..., n_realizations)``
+        ``(batch_size, n_observations, n_realizations, ..., n_realizations)``
         with ``n_contexts`` trailing realization axes. ``rates[b, o, r0, r1]``
         is ``P(observation o == 1)`` in episode ``b`` when active variable 0 takes
         value ``r0`` and active variable 1 takes value ``r1``.
     interactions:
-        ``(n_episodes, n_observations, k)`` raw strengths, one per ordered pair
+        ``(batch_size, n_observations, k)`` raw strengths, one per ordered pair
         of active variables in the order ``(0,1), (1,0), (0,2), (2,0), ...``.
         Useful for analysis; not needed to run the environment.
 
@@ -220,16 +220,16 @@ def joint_likelihood(
         profile = value_profile(cfg)
 
     ctx_inds = np.asarray(ctx_inds)
-    n_episodes, n_contexts = ctx_inds.shape
+    batch_size, n_contexts = ctx_inds.shape
     if n_contexts != cfg.n_contexts:
         raise ValueError(
             f"ctx_inds has {n_contexts} contexts but cfg.n_contexts={cfg.n_contexts}"
         )
 
-    active_keys = keys[ctx_inds]        # (n_eps, n_ctx, n_obs, dim)
+    active_keys = keys[ctx_inds]        # (batch_size, n_ctx, n_obs, dim)
     active_queries = queries[ctx_inds]
 
-    logits = np.zeros(cfg.joint_likelihood_shape(n_episodes))
+    logits = np.zeros(cfg.joint_likelihood_shape(batch_size))
     strengths: list[np.ndarray] = []
 
     if n_contexts == 1:
@@ -254,7 +254,7 @@ def joint_likelihood(
                 broadcast_shape[i] = cfg.n_realizations
                 broadcast_shape[j] = cfg.n_realizations
                 logits += pair.reshape(
-                    n_episodes, cfg.n_observations, *broadcast_shape
+                    batch_size, cfg.n_observations, *broadcast_shape
                 )
                 strengths.extend([z_ij, z_ji])
 
@@ -264,7 +264,7 @@ def joint_likelihood(
 def marginal_likelihood(rates: np.ndarray, n_contexts: int) -> np.ndarray:
     """Collapse the joint rates to one independent table per active variable.
 
-    Returns ``(n_episodes, n_observations, n_contexts, n_realizations)``, where
+    Returns ``(batch_size, n_observations, n_contexts, n_realizations)``, where
     entry ``[b, o, c, r]`` averages the joint rate over all realizations of
     every context *other* than ``c``.
 
@@ -275,9 +275,9 @@ def marginal_likelihood(rates: np.ndarray, n_contexts: int) -> np.ndarray:
     with.
     """
     rates = np.asarray(rates)
-    n_episodes, n_observations = rates.shape[:2]
+    batch_size, n_observations = rates.shape[:2]
     n_realizations = rates.shape[2]
-    out = np.empty((n_episodes, n_observations, n_contexts, n_realizations))
+    out = np.empty((batch_size, n_observations, n_contexts, n_realizations))
     for c in range(n_contexts):
         other_axes = tuple(2 + i for i in range(n_contexts) if i != c)
         out[:, :, c, :] = rates.mean(axis=other_axes) if other_axes else rates
@@ -289,20 +289,20 @@ def marginal_likelihood(rates: np.ndarray, n_contexts: int) -> np.ndarray:
 # --------------------------------------------------------------------------- #
 def _draw(
     pool: np.ndarray,
-    n_episodes: int,
+    batch_size: int,
     n_contexts: int,
     distinct: bool,
     rng: np.random.Generator,
 ) -> np.ndarray:
-    """Draw ``(n_episodes, n_contexts)`` variables from ``pool``."""
+    """Draw ``(batch_size, n_contexts)`` variables from ``pool``."""
     if not distinct:
-        return rng.choice(pool, size=(n_episodes, n_contexts))
+        return rng.choice(pool, size=(batch_size, n_contexts))
     if n_contexts > pool.size:
         raise ValueError(
             f"cannot draw {n_contexts} distinct variables from a pool of {pool.size}"
         )
     # Vectorized per-row sampling without replacement.
-    order = np.argsort(rng.random((n_episodes, pool.size)), axis=1)
+    order = np.argsort(rng.random((batch_size, pool.size)), axis=1)
     return pool[order[:, :n_contexts]]
 
 
@@ -310,7 +310,7 @@ def sample_contexts(
     cfg: CogGridConfig,
     rng: np.random.Generator,
     split: Split = "held_out",
-    n_episodes: int | None = None,
+    batch_size: int | None = None,
 ) -> tuple[np.ndarray, np.ndarray]:
     """Choose which latent variables are active, and which one carries the goal.
 
@@ -330,9 +330,9 @@ def sample_contexts(
     Returns
     -------
     ctx_inds:
-        ``(n_episodes, n_contexts)`` sorted indices of the active variables.
+        ``(batch_size, n_contexts)`` sorted indices of the active variables.
     goal_ind:
-        ``(n_episodes,)`` which *column* of ``ctx_inds`` is the goal.
+        ``(batch_size,)`` which *column* of ``ctx_inds`` is the goal.
 
     Notes
     -----
@@ -340,7 +340,7 @@ def sample_contexts(
     second variable to pair a novel one with, so the "at most one held-out variable"
     rule is vacuous and the single variable (hence the goal) may be held out.
     """
-    n_episodes = cfg.n_episodes if n_episodes is None else n_episodes
+    batch_size = cfg.batch_size if batch_size is None else batch_size
     all_vars = np.arange(cfg.n_vars)
     n_held_out = int(cfg.n_held_out_vars or 0)
     held_out, train = all_vars[:n_held_out], all_vars[n_held_out:]
@@ -352,9 +352,9 @@ def sample_contexts(
     distinct = not cfg.allow_repeated_vars
 
     if split == "held_out":
-        ctx = _draw(held_out, n_episodes, cfg.n_contexts, distinct, rng)
+        ctx = _draw(held_out, batch_size, cfg.n_contexts, distinct, rng)
         ctx_inds = np.sort(ctx, axis=1)
-        goal_ind = rng.random((n_episodes, cfg.n_contexts)).argmax(axis=1)
+        goal_ind = rng.random((batch_size, cfg.n_contexts)).argmax(axis=1)
         return ctx_inds, goal_ind
 
     if split != "train":
@@ -365,19 +365,19 @@ def sample_contexts(
         if cfg.subsample_vars is None
         else np.concatenate([train, held_out])
     )
-    ctx = _draw(pool, n_episodes, cfg.n_contexts, distinct, rng)
+    ctx = _draw(pool, batch_size, cfg.n_contexts, distinct, rng)
 
     # Keep at most one held-out variable per episode; replace any extras.
     is_held_out = np.isin(ctx, held_out)
     keep = np.zeros_like(is_held_out)
-    keep[np.arange(n_episodes), is_held_out.argmax(axis=1)] = is_held_out.any(axis=1)
+    keep[np.arange(batch_size), is_held_out.argmax(axis=1)] = is_held_out.any(axis=1)
     surplus = is_held_out & ~keep
     if surplus.any():
         ctx[surplus] = rng.choice(train, size=int(surplus.sum()))
     ctx_inds = np.sort(ctx, axis=1)
 
     # The goal must be a familiar variable: zero out held-out columns before argmax.
-    priority = rng.random((n_episodes, cfg.n_contexts))
+    priority = rng.random((batch_size, cfg.n_contexts))
     priority[np.isin(ctx_inds, held_out)] = 0.0
     return ctx_inds, priority.argmax(axis=1)
 
@@ -386,16 +386,16 @@ def sample_realizations(
     cfg: CogGridConfig,
     rng: np.random.Generator,
     goal_ind: np.ndarray,
-    n_episodes: int | None = None,
+    batch_size: int | None = None,
 ) -> tuple[np.ndarray, np.ndarray]:
     """Draw a value for each active variable, uniformly over realizations.
 
-    Returns ``(ctx_vals, goal_value)`` with shapes ``(n_episodes, n_contexts)``
-    and ``(n_episodes,)``.
+    Returns ``(ctx_vals, goal_value)`` with shapes ``(batch_size, n_contexts)``
+    and ``(batch_size,)``.
     """
-    n_episodes = cfg.n_episodes if n_episodes is None else n_episodes
-    ctx_vals = rng.integers(0, cfg.n_realizations, size=(n_episodes, cfg.n_contexts))
-    goal_value = ctx_vals[np.arange(n_episodes), goal_ind]
+    batch_size = cfg.batch_size if batch_size is None else batch_size
+    ctx_vals = rng.integers(0, cfg.n_realizations, size=(batch_size, cfg.n_contexts))
+    goal_value = ctx_vals[np.arange(batch_size), goal_ind]
     return ctx_vals, goal_value
 
 
@@ -403,13 +403,13 @@ def observation_rates(rates: np.ndarray, ctx_vals: np.ndarray) -> np.ndarray:
     """Pick out the true Bernoulli rate for the realization that actually occurred.
 
     ``rates`` is the full joint table; ``ctx_vals`` says which cell is real.
-    Returns ``(n_episodes, n_observations)``.
+    Returns ``(batch_size, n_observations)``.
     """
     rates = np.asarray(rates)
     ctx_vals = np.asarray(ctx_vals)
-    n_episodes, n_observations = rates.shape[:2]
+    batch_size, n_observations = rates.shape[:2]
     index = (
-        np.arange(n_episodes)[:, None],
+        np.arange(batch_size)[:, None],
         np.arange(n_observations)[None, :],
         *(ctx_vals[:, c, None] for c in range(ctx_vals.shape[1])),
     )
@@ -423,13 +423,13 @@ def sample_observations(
 ) -> np.ndarray:
     """Draw ``n_steps`` i.i.d. Bernoulli observation vectors per episode.
 
-    Returns a boolean ``(n_episodes, n_steps, n_observations)`` array.
+    Returns a boolean ``(batch_size, n_steps, n_observations)`` array.
 
     The rate does not change over the episode — this is what "stationary" means
     here. All the difficulty is in the *ambiguity* of the mapping from
     realizations to rates, not in tracking a moving target.
     """
     true_rates = np.asarray(true_rates)
-    n_episodes, n_observations = true_rates.shape
-    draws = rng.random((n_episodes, n_steps, n_observations))
+    batch_size, n_observations = true_rates.shape
+    draws = rng.random((batch_size, n_steps, n_observations))
     return true_rates[:, None, :] > draws

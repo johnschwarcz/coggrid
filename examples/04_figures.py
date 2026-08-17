@@ -16,13 +16,13 @@ from coggrid.viz import summary_figure
 # a future option here the way it matches `--fps` in 05_animation.py.
 parser = argparse.ArgumentParser(allow_abbrev=False)
 parser.add_argument("--out", type=Path, default=Path("figures"))
-parser.add_argument("--episodes", type=int, default=15000)
+parser.add_argument("--batch-size", type=int, default=15000)
 parser.add_argument("--seed", type=int, default=None)
 args, _ignored = parser.parse_known_args()
 args.out.mkdir(parents=True, exist_ok=True)
 
 cfg = CogGridConfig(n_vars=500, n_contexts=2, n_realizations=10, seed=None)
-batch = World(cfg).sample_episodes(args.episodes)
+batch = World(cfg).sample_episodes(args.batch_size)
 traces = run_observers(batch)
 
 names = ["episode", "performance", "regret_analysis", "belief_shape"]

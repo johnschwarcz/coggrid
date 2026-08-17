@@ -50,9 +50,9 @@ SCRIPTS: dict[str, list[str]] = {
     "examples/01_quickstart.py": [],
     "examples/02_gym_loop.py": [],
     "examples/03_customize.py": [],
-    "examples/04_figures.py": ["--episodes", "12"],
+    "examples/04_figures.py": ["--batch-size", "12"],
     "examples/05_animation.py": ["--contexts", "2"],
-    "docs/make_assets.py": ["--episodes", "12"],
+    "docs/make_assets.py": ["--batch-size", "12"],
 }
 
 WRITES_FIGURES = {"examples/04_figures.py", "examples/05_animation.py",
@@ -116,7 +116,7 @@ def test_a_script_that_needs_its_own_location_still_finds_it(tmp_path, monkeypat
     monkeypatch.setenv("MPLBACKEND", "Agg")
     namespace = _paste_and_run(
         ROOT / "docs/make_assets.py",
-        ["--episodes", "12", "--out", str(tmp_path / "figures")],
+        ["--batch-size", "12", "--out", str(tmp_path / "figures")],
         cwd=ROOT / "src" / "coggrid",
     )
     assert namespace["ROOT"] == ROOT

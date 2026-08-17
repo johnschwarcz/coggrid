@@ -418,7 +418,7 @@ class TestContextCounts:
 
         b, t = self._episode(2)
         batched = disentanglement(t["joint"], t["naive"], b, per_variable=True)
-        for e in range(b.n_episodes):
+        for e in range(b.batch_size):
             view = EpisodeView(batch=b, traces=t, episode=e)
             assert np.array_equal(view.disentanglement, batched[e])
 

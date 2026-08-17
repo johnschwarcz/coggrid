@@ -56,23 +56,23 @@ class BeliefTrace:
     name:
         ``"joint"`` or ``"naive"``.
     belief:
-        ``(n_episodes, n_steps, n_contexts, n_realizations)`` marginal posterior
+        ``(batch_size, n_steps, n_contexts, n_realizations)`` marginal posterior
         over each active variable's value.
     goal_belief:
-        ``(n_episodes, n_steps, n_realizations)`` the slice of ``belief`` for the
+        ``(batch_size, n_steps, n_realizations)`` the slice of ``belief`` for the
         goal variable.
     estimate:
-        ``(n_episodes, n_steps, n_contexts)`` posterior mean realization.
+        ``(batch_size, n_steps, n_contexts)`` posterior mean realization.
     accuracy:
-        ``(n_episodes, n_steps)`` 1.0 where the posterior mode equals the true
+        ``(batch_size, n_steps)`` 1.0 where the posterior mode equals the true
         goal value.
     p_correct:
-        ``(n_episodes, n_steps)`` posterior probability assigned to the true goal
+        ``(batch_size, n_steps)`` posterior probability assigned to the true goal
         value. A softer, lower-variance version of ``accuracy``.
     mse:
-        ``(n_episodes, n_steps)`` squared error of the posterior mean.
+        ``(batch_size, n_steps)`` squared error of the posterior mean.
     log_posterior:
-        ``(n_episodes, n_steps, ...)`` unnormalized cumulative log-likelihood,
+        ``(batch_size, n_steps, ...)`` unnormalized cumulative log-likelihood,
         over the joint realization grid for the joint observer and over
         ``(n_contexts, n_realizations)`` for the naive one. Kept because it is
         what you need for likelihood-ratio and model-comparison analyses.
@@ -106,7 +106,7 @@ class BeliefTrace:
     def __repr__(self) -> str:  # pragma: no cover - cosmetic
         f = self.final()
         return (
-            f"BeliefTrace({self.name!r}, n_episodes={self.belief.shape[0]}, "
+            f"BeliefTrace({self.name!r}, batch_size={self.belief.shape[0]}, "
             f"final acc={f['accuracy']:.3f}, p_correct={f['p_correct']:.3f})"
         )
 
@@ -125,9 +125,9 @@ def _cumulative_log_likelihood(
 ) -> np.ndarray:
     """Accumulate Bernoulli log-likelihood over time.
 
-    ``observations`` is ``(n_eps, n_steps, n_obs)``; ``rates`` is
-    ``(n_eps, n_obs, *hypothesis_shape)``. Returns
-    ``(n_eps, n_steps, *hypothesis_shape)``.
+    ``observations`` is ``(batch_size, n_steps, n_obs)``; ``rates`` is
+    ``(batch_size, n_obs, *hypothesis_shape)``. Returns
+    ``(batch_size, n_steps, *hypothesis_shape)``.
 
     Because observations are i.i.d. given the latent variable, the posterior after
     ``t`` steps depends only on the running sum of per-step log-likelihoods.
@@ -161,7 +161,7 @@ def joint_observer(batch: EpisodeBatch) -> BeliefTrace:
 
     # Marginalise the joint posterior down to one distribution per active variable.
     belief = np.empty(
-        (batch.n_episodes, batch.n_steps, n_contexts, batch.cfg.n_realizations)
+        (batch.batch_size, batch.n_steps, n_contexts, batch.cfg.n_realizations)
     )
     for c in range(n_contexts):
         other = tuple(2 + i for i in range(n_contexts) if i != c)
@@ -206,7 +206,7 @@ def run_observers(batch: EpisodeBatch) -> dict[ObserverName, BeliefTrace]:
 def score_belief(belief: np.ndarray, batch: EpisodeBatch) -> dict[str, np.ndarray]:
     """Score a belief array against the ground truth in ``batch``.
 
-    Works on anything shaped ``(n_episodes, n_steps, n_contexts,
+    Works on anything shaped ``(batch_size, n_steps, n_contexts,
     n_realizations)`` — the built-in observers, but equally a learned agent's
     output, which is the point of keeping it a free function.
 
@@ -217,7 +217,7 @@ def score_belief(belief: np.ndarray, batch: EpisodeBatch) -> dict[str, np.ndarra
     expected_tail = (batch.cfg.n_contexts, batch.cfg.n_realizations)
     if belief.ndim != 4 or belief.shape[2:] != expected_tail:
         raise ValueError(
-            f"belief must have shape (n_episodes, n_steps, {expected_tail[0]}, "
+            f"belief must have shape (batch_size, n_steps, {expected_tail[0]}, "
             f"{expected_tail[1]}), got {belief.shape}"
         )
 
@@ -251,7 +251,7 @@ def factorization_regret(
 ) -> np.ndarray:
     """Divergence between the joint and naive posteriors over the goal variable.
 
-    Returns ``(n_episodes, n_steps)``. This is how far the factorized observer's
+    Returns ``(batch_size, n_steps)``. This is how far the factorized observer's
     belief has drifted from the optimal one — large where modelling the
     interaction actually mattered, near zero where the episode happened to be
     separable anyway.
@@ -274,7 +274,7 @@ def factorization_regret(
 # dis-entanglement
 # --------------------------------------------------------------------------- #
 def _log_marginal_belief(trace: BeliefTrace, n_contexts: int) -> np.ndarray:
-    """``(n_episodes, n_steps, n_contexts, n_realizations)`` log marginal posterior.
+    """``(batch_size, n_steps, n_contexts, n_realizations)`` log marginal posterior.
 
     Read off the stored log posterior rather than ``belief``. Beliefs routinely
     fall below 1e-12 once an observer is confident, and dividing two such numbers
@@ -318,8 +318,8 @@ def disentanglement(
 ) -> np.ndarray:
     """How much of each step's belief update was carried by the history.
 
-    Returns ``(n_episodes, n_steps)`` for the goal variable, or
-    ``(n_episodes, n_steps, n_contexts)`` with ``per_variable=True``.
+    Returns ``(batch_size, n_steps)`` for the goal variable, or
+    ``(batch_size, n_steps, n_contexts)`` with ``per_variable=True``.
 
     The Jeffreys divergence (arXiv:2603.27134 §B.3) between the naive marginal
     likelihood ``p_Z(o_t | r)`` and the history-conditioned one
@@ -344,4 +344,4 @@ def disentanglement(
     ).sum(-1)
     if per_variable:
         return per_var
-    return per_var[np.arange(batch.n_episodes), :, batch.goal_ind]
+    return per_var[np.arange(batch.batch_size), :, batch.goal_ind]

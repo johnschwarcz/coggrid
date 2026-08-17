@@ -231,7 +231,7 @@ class TestPhaseStructure:
                              turn, waveform, period=1.0)
 
         worst = 0.0
-        for e in range(batch.n_episodes):
+        for e in range(batch.batch_size):
             for c in range(cfg.n_observations):
                 z_ij, z_ji = batch.interactions[e, c, 0], batch.interactions[e, c, 1]
                 rebuilt = sigmoid(np.outer(wave(z_ij * cfg.n_roll - r),
@@ -315,7 +315,7 @@ class TestDisentanglement:
             traces["joint"], traces["naive"], batch, per_variable=True
         )
         goal = disentanglement(traces["joint"], traces["naive"], batch)
-        expected = per_var[np.arange(batch.n_episodes), :, batch.goal_ind]
+        expected = per_var[np.arange(batch.batch_size), :, batch.goal_ind]
         assert np.array_equal(goal, expected)
 
 

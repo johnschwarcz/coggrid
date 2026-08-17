@@ -13,10 +13,10 @@ from coggrid import CogGridConfig, CogGridEnv
 cfg = CogGridConfig(n_vars=300, n_contexts=2, n_realizations=8, n_steps=30, seed=0)
 
 
-def run(policy, episodes=200, expose_likelihood=False):
+def run(policy, batch_size=200, expose_likelihood=False):
     env = CogGridEnv(cfg, expose_likelihood=expose_likelihood, seed=0)
     returns = []
-    for _ in range(episodes):
+    for _ in range(batch_size):
         obs, info = env.reset()
         state = policy.reset(obs, info)
         total = 0.0
