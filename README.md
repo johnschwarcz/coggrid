@@ -210,7 +210,7 @@ for _ in range(env.cfg.n_steps):
     obs, reward, terminated, truncated, info = env.step(my_agent(obs))
 ```
 
-**Observation** — a dict:
+**obs** — a dict:
 
 | Key | Shape | Meaning |
 | --- | --- | --- |
