@@ -1,8 +1,9 @@
 # coggrid
 
 [![CI](https://github.com/johnschwarcz/coggrid/actions/workflows/ci.yml/badge.svg)](https://github.com/johnschwarcz/coggrid/actions/workflows/ci.yml)
+[![PyPI](https://img.shields.io/pypi/v/coggrid)](https://pypi.org/project/coggrid/)
 [![Python 3.10+](https://img.shields.io/badge/python-3.10%2B-blue)](https://www.python.org/downloads/)
-[![License: MIT](https://img.shields.io/badge/license-MIT-green)](LICENSE)
+[![License: MIT](https://img.shields.io/badge/license-MIT-green)](https://github.com/johnschwarcz/coggrid/blob/main/LICENSE)
 [![arXiv](https://img.shields.io/badge/arXiv-2603.27134-b31b1b)](https://arxiv.org/abs/2603.27134)
 
 A stationary POMDP for studying **compositional generalization in latent space** —
@@ -13,7 +14,7 @@ the environment and ideal-observer baselines from
 
 An example episode:
 <p align="center">
-  <img src="docs/images/episode_animation_1.gif" alt="An episode playing back: joint and naive posteriors, their difference, and the evidence stream" width="100%">
+  <img src="https://raw.githubusercontent.com/johnschwarcz/coggrid/main/docs/images/episode_animation_1.gif" alt="An episode playing back: joint and naive posteriors, their difference, and the evidence stream" width="100%">
 </p>
 
 <p align="center"><em>
@@ -30,13 +31,13 @@ converges on the true realization of both variables; the naive one settles
 elsewhere and stays there:
 
 <p align="center">
-  <img src="docs/images/episode.png" alt="One episode end to end: the joint likelihood surface, the observation stream, and each observer's belief about both variables" width="100%">
+  <img src="https://raw.githubusercontent.com/johnschwarcz/coggrid/main/docs/images/episode.png" alt="One episode end to end: the joint likelihood surface, the observation stream, and each observer's belief about both variables" width="100%">
 </p>
 
 Across a batch of episodes:
 
 <p align="center">
-  <img src="docs/images/regret_analysis.png" alt="Factorization regret predicts the naive observer's failures, and its own confidence does not" width="100%">
+  <img src="https://raw.githubusercontent.com/johnschwarcz/coggrid/main/docs/images/regret_analysis.png" alt="Factorization regret predicts the naive observer's failures, and its own confidence does not" width="100%">
 </p>
 
 The top row reads those episodes from inside the observers: how often an
@@ -80,7 +81,7 @@ Each episode:
 The inner product of one variable's key with the other's query sets a *phase* that translates an "XOR"-like pattern.
 
 <p align="center">
-  <img src="docs/images/interaction_phases.png" alt="Variable embeddings, the inner products they produce, and the standard likelihood pattern those phases translate" width="100%">
+  <img src="https://raw.githubusercontent.com/johnschwarcz/coggrid/main/docs/images/interaction_phases.png" alt="Variable embeddings, the inner products they produce, and the standard likelihood pattern those phases translate" width="100%">
 </p>
 
 
@@ -95,7 +96,7 @@ Reading left to right:
 Turning the keys sweeps the scores, and every panel to the right follows:
 
 <p align="center">
-  <img src="docs/images/interaction_phases_animated.gif" alt="Turning a variable's key sweeps its interaction score, sliding the selected region across the standard pattern" width="100%">
+  <img src="https://raw.githubusercontent.com/johnschwarcz/coggrid/main/docs/images/interaction_phases_animated.gif" alt="Turning a variable's key sweeps its interaction score, sliding the selected region across the standard pattern" width="100%">
 </p>
 
 Note: This is meant to demonstrate how embeddings impact the likelihood. Embeddings are never actually rotated.
@@ -113,7 +114,7 @@ The agent sees a **vector** of
 per-channel rates.
 
 <p align="center">
-  <img src="docs/images/evidence_likelihood.png" alt="Per-channel rate tables, and the posterior induced by every possible observation vector" width="100%">
+  <img src="https://raw.githubusercontent.com/johnschwarcz/coggrid/main/docs/images/evidence_likelihood.png" alt="Per-channel rate tables, and the posterior induced by every possible observation vector" width="100%">
 </p>
 
 
@@ -136,17 +137,18 @@ traces["naive"].final()   # the same three, for the factorized observer
 
 ## Install
 
-Not yet on PyPI. Install from source:
+```bash
+pip install coggrid          # core
+pip install "coggrid[viz]"   # + matplotlib and seaborn for the figures
+```
+
+Python 3.10+. No compiled extensions, no GPU, any OS.
+
+From source, for development:
 
 ```bash
 git clone https://github.com/johnschwarcz/coggrid
 cd coggrid
-pip install -e ".[viz]"     # numpy + gymnasium + matplotlib
-```
-
-Python 3.10+. No compiled extensions, no GPU, any OS. For development:
-
-```bash
 pip install -e ".[dev]"
 pytest
 ```
@@ -389,7 +391,7 @@ world = World(cfg, embeddings=codebook_embeddings)
 | `realizations` | `RealizationSampler` | The prior over latent values |
 | `observations` | `ObservationModel` | Non-stationary, correlated or continuous observations |
 
-Signatures are at the top of [`src/coggrid/world.py`](src/coggrid/world.py).
+Signatures are at the top of [`src/coggrid/world.py`](https://github.com/johnschwarcz/coggrid/blob/main/src/coggrid/world.py).
 Because each returns its outputs rather than mutating shared state, a replacement
 can be unit-tested on its own.
 
@@ -470,4 +472,4 @@ results.
 
 ## License
 
-MIT — see [LICENSE](LICENSE).
+MIT — see [LICENSE](https://github.com/johnschwarcz/coggrid/blob/main/LICENSE).

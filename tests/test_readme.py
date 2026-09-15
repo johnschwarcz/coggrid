@@ -34,6 +34,10 @@ from coggrid import (  # noqa: E402
 README = Path(__file__).resolve().parent.parent / "README.md"
 TEXT = README.read_text(encoding="utf-8")
 
+#: PyPI renders the README standalone, with no repository behind it, so its
+#: links have to be absolute. Strip this back off to reach the local file.
+RAW = "https://raw.githubusercontent.com/johnschwarcz/coggrid/main/"
+
 # One README block builds an animation to show that it plays inline, and never
 # renders it — which is the point of that example, not an oversight.
 pytestmark = pytest.mark.filterwarnings(
@@ -204,7 +208,13 @@ def test_expose_likelihood_is_off_by_default():
 
 def test_every_referenced_image_exists():
     for src in re.findall(r'src="([^"]+)"', TEXT):
-        assert (README.parent / src).exists(), f"README references missing {src}"
+        local = src.removeprefix(RAW)
+        assert local != src or not src.startswith("http"), (
+            f"README image is an off-repository URL: {src}"
+        )
+        assert (README.parent / local).exists(), (
+            f"README references missing {src}"
+        )
 
 
 def test_every_relative_link_resolves():
