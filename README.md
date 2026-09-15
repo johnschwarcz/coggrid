@@ -30,17 +30,7 @@ Top: the optimal and naive observers' posteriors and their difference. Bottom: A
   <img src="https://raw.githubusercontent.com/johnschwarcz/coggrid/main/docs/images/regret_analysis.png" alt="Factorization regret predicts the naive observer's failures, and its own confidence does not" width="100%">
 </p>
 
-The top row reads those episodes from inside the observers: how often an
-answer held with a given confidence turns out to be right, and how accuracy
-and confidence move as episodes are ranked by factorization regret. The naive
-observer's confidence does not track its accuracy — where factorizing costs
-the most, its accuracy falls and its confidence does not.
-
-The bottom row is the same failure seen from outside: regret against accuracy,
-the two observers' trajectories through accuracy space, and where their final
-answers disagree. The joint observer is more likely to identify the goal
-variable correctly, and when their posteriors diverge the naive observer is
-not just noisier — it can become misaligned.
+The naive observer is not just noisier — Factorization regret decouples confidence and accuracy.
 
 ---
 
