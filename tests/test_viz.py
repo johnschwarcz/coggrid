@@ -305,8 +305,37 @@ class TestStaticFigures:
     def test_regret_column_dropped_for_single_observer(self, batch, traces):
         solo = plot_performance({"joint": traces["joint"]})
         assert [ax.get_title() for ax in solo.axes] == [
-            "P(mode correct)", "P(true value)", "squared error"
+            "accuracy", "P(true value)", "squared error"
         ]
+
+    def test_confidently_wrong_pairs_calibration_with_the_scissor(
+        self, batch, traces
+    ):
+        from coggrid.viz import plot_confidently_wrong
+
+        titles = [ax.get_title() for ax in plot_confidently_wrong(batch, traces).axes]
+        assert any("calibration" in t for t in titles)
+        assert any("factorization regret" in t for t in titles)
+
+    def test_confidently_wrong_survives_fewer_episodes_than_bins(self):
+        """Rank bins are capped at the batch size, or every bin mean is NaN."""
+        from coggrid.viz import plot_confidently_wrong
+
+        tiny = World(SMALL).sample_episodes(3)
+        fig = plot_confidently_wrong(tiny, run_observers(tiny), n_bins=10)
+        drawn = np.concatenate(
+            [line.get_ydata() for ax in fig.axes for line in ax.get_lines()]
+        )
+        assert not np.isnan(drawn).any()
+
+    def test_factorization_cost_stacks_both_figures(self, batch, traces):
+        """The combined figure carries all five panels, not a subset."""
+        from coggrid.viz import plot_factorization_cost
+
+        titles = [ax.get_title() for ax in plot_factorization_cost(batch, traces).axes]
+        for panel in ("calibration", "factorization regret", "regret vs performance",
+                      "relative performance", "error agreement"):
+            assert any(panel in t for t in titles), panel
 
     def test_episode_figure_composes_both_halves(self, batch, traces):
         titles = [ax.get_title() for ax in plot_episode(batch, traces).axes]
@@ -333,12 +362,33 @@ class TestContextCounts:
 
     @pytest.mark.parametrize("n_contexts", [1, 2, 3, 5])
     def test_static_figures_survive(self, n_contexts):
-        from coggrid.viz import plot_belief_shape, plot_likelihood, plot_trial
+        from coggrid.viz import (
+            plot_belief_shape,
+            plot_confidently_wrong,
+            plot_likelihood,
+            plot_trial,
+        )
 
         b, t = self._episode(n_contexts)
         for fig in (plot_likelihood(b), plot_trial(b, t), plot_episode(b, t),
-                    plot_performance(t), plot_belief_shape(b, t)):
+                    plot_performance(t), plot_belief_shape(b, t),
+                    plot_confidently_wrong(b, t)):
             assert fig.axes
+
+    @pytest.mark.parametrize("n_contexts", [2, 3, 5])
+    def test_combined_cost_figure_survives_interacting_variables(self, n_contexts):
+        from coggrid.viz import plot_factorization_cost
+
+        b, t = self._episode(n_contexts)
+        assert plot_factorization_cost(b, t).axes
+
+    def test_combined_cost_figure_needs_more_than_one_variable(self):
+        """Its top row bins by regret, which is identically zero for one."""
+        from coggrid.viz import plot_factorization_cost
+
+        b, t = self._episode(1)
+        with pytest.raises(ValueError, match="near-constant"):
+            plot_factorization_cost(b, t)
 
     @pytest.mark.parametrize("n_contexts", [4, 6, 8])
     def test_pair_panels_stay_bounded(self, n_contexts):

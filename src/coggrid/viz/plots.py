@@ -52,6 +52,8 @@ __all__ = [
     "plot_confidence_density",
     "plot_regret_analysis",
     "plot_belief_shape",
+    "plot_confidently_wrong",
+    "plot_factorization_cost",
     "summary_figure",
 ]
 
@@ -486,7 +488,7 @@ def plot_episode(
 #: y-axis label per metric. ``regret`` is the odd one out: it is computed
 #: *between* the two observers rather than read off a single trace.
 METRIC_LABELS = {
-    "accuracy": "P(mode correct)",
+    "accuracy": "accuracy",
     "p_correct": "P(true value)",
     "mse": "squared error",
     "regret": "symmetric KL (nats)",
@@ -649,41 +651,81 @@ def plot_relative_accuracy(
     traces: Mapping[str, BeliefTrace] | Iterable[BeliefTrace],
     *,
     metric: str = "accuracy",
-    n_markers: int = 4,
+    n_curves: int = 20,
     ax: plt.Axes | None = None,
     palette: Palette = PALETTE,
     figsize: tuple[float, float] = (4.4, 4.2),
 ) -> Figure:
-    """Joint against naive, as a trajectory through time rather than two curves.
+    """Joint against naive, as trajectories grouped by regret percentiles.
 
     Each point is one timestep: naive performance on x, joint on y. The diagonal
-    is "factorizing costs nothing", so vertical distance above it *is* the cost,
-    and the shape of the path says whether that cost grows or closes as evidence
-    arrives. The annotation is the final-step ratio.
+    is "factorizing costs nothing". We group episodes by their final factorization
+    regret into percentiles to show how this divergence varies across the dataset.
     """
     joint, naive = _observer_pair(traces)
-    x, y = getattr(naive, metric).mean(0), getattr(joint, metric).mean(0)
     fig, ax, _ = _new_ax(ax, figsize)
 
-    hi = float(max(x.max(), y.max())) * 1.08
+    regret = factorization_regret(joint, naive)[:, -1]
+    
+    n_valid_curves = max(1, min(n_curves, len(regret)))
+    curves = np.array_split(np.argsort(regret), n_valid_curves)
+
+    hi = 0.0
+    cmap = plt.get_cmap("viridis")
+    norm = plt.Normalize(vmin=0, vmax=100)
+    colors = cmap(np.linspace(0, 1, n_valid_curves))
+
+    for k, b in enumerate(curves):
+        if len(b) == 0:
+            continue
+        x = getattr(naive, metric)[b].mean(0)
+        y = getattr(joint, metric)[b].mean(0)
+        hi = max(hi, float(x.max()), float(y.max()))
+
+        ax.plot(x, y, color=colors[k], lw=2.4, zorder=2)
+        
+        # Add arrows every other step to convey the direction of inference
+        for t in range(2, len(x), 2):
+            # Only draw if there is a non-trivial movement between steps
+            if (x[t] - x[t-1])**2 + (y[t] - y[t-1])**2 > 1e-8:
+                ax.annotate(
+                    "", 
+                    xy=(x[t], y[t]), 
+                    xytext=(x[t-1], y[t-1]),
+                    arrowprops=dict(
+                        arrowstyle="->", color=colors[k], 
+                        lw=1.8, shrinkA=0, shrinkB=0
+                    ),
+                    zorder=3
+                )
+
+        ax.scatter(x[0], y[0], s=150, facecolors=colors[k],
+                   edgecolors="white", linewidths=1.2, zorder=4)
+
+    hi = hi * 1.1 if hi > 0 else 1.0
     ax.plot([0, hi], [0, hi], color=palette.truth, lw=1.0, ls="-", alpha=0.4, zorder=1)
-    ax.plot(x, y, color=palette.regret, lw=2.4, zorder=2)
 
-    picks = np.linspace(0, len(x) - 1, min(n_markers, len(x)), dtype=int)
-    ax.scatter(x[picks], y[picks], s=45, facecolors=palette.regret,
-               edgecolors="white", linewidths=1.2, zorder=3)
-    ax.annotate("start", (x[0], y[0]), xytext=(8, -14),
-                textcoords="offset points", fontsize=9)
-    if x[-1] > 0:
-        ax.annotate(f"×{y[-1] / x[-1]:.1f}", (x[-1], y[-1]), xytext=(-30, 10),
-                    textcoords="offset points", fontsize=11, color=palette.regret)
-
-    label = METRIC_LABELS.get(metric, metric)
-    label_axes(ax, xlabel=f"naive {label}", ylabel=f"joint {label}",
+    label_str = METRIC_LABELS.get(metric, metric)
+    label_axes(ax, xlabel=f"naive {label_str}", ylabel=f"joint {label_str}",
                title="relative performance")
     ax.set_xlim(0, hi)
     ax.set_ylim(0, hi)
+    ax.set_aspect("equal", adjustable="box")
     ax.grid(alpha=0.25, color=palette.grid)
+    
+    # Add dummy scatter for trial onset legend
+    ax.scatter([], [], s=150, facecolors="gray", edgecolors="white", 
+               linewidths=1.2, label="trial onset")
+    ax.legend(loc="upper left", fontsize=9, frameon=False)
+
+    # Add scalar mappable color bar inside the panel
+    sm = plt.cm.ScalarMappable(cmap=cmap, norm=norm)
+    sm.set_array([])
+    cbaxes = ax.inset_axes([0.45, 0.12, 0.5, 0.04])
+    cbar = fig.colorbar(sm, cax=cbaxes, orientation='horizontal')
+    cbar.set_label("Factorization Regret Percentile", fontsize=8)
+    cbar.ax.tick_params(labelsize=8)
+    
     return fig
 
 
@@ -1104,7 +1146,7 @@ def _safe_correlation(x: np.ndarray, y: np.ndarray) -> float:
     A small batch can easily land every episode on the same accuracy, which makes
     the correlation genuinely undefined. ``np.corrcoef`` divides by a zero
     standard deviation there and warns; returning ``nan`` quietly lets the caller
-    decide what to show.
+    decides what to show.
     """
     if x.std() == 0 or y.std() == 0:
         return float("nan")
@@ -1116,7 +1158,7 @@ def plot_regret_vs_accuracy(
     traces: Mapping[str, BeliefTrace] | Iterable[BeliefTrace],
     *,
     metric: str = "accuracy",
-    n_bins: int = 12,
+    n_bins: int = 20,
     min_per_bin: int = 5,
     ax: plt.Axes | None = None,
     palette: Palette = PALETTE,
@@ -1160,7 +1202,7 @@ def plot_regret_vs_accuracy(
         r = _safe_correlation(regret, values)
         ax.fill_between(centers[keep], mean - sem, mean + sem,
                         color=color, alpha=0.2, lw=0)
-        label = trace.name if np.isnan(r) else f"{trace.name} (r={r:+.2f})"
+        label = trace.name if np.isnan(r) else f"{trace.name}"
         ax.plot(centers[keep], mean, color=color, lw=2.2, marker="o", ms=4,
                 label=label)
 
@@ -1208,16 +1250,14 @@ def plot_map_agreement(
     cmap = plt.get_cmap("magma")
     cmap = cmap.with_extremes(bad=cmap(0.0))
     extent = (edges[0], edges[-1], edges[0], edges[-1])
-    ax.imshow(counts.T, origin="lower", extent=extent, aspect="auto",
+    ax.imshow(counts.T, origin="lower", extent=extent, aspect="equal",
               cmap=cmap, norm="log" if counts.max() > 20 else None)
     ax.plot([edges[0], edges[-1]], [edges[0], edges[-1]],
             color="white", ls="--", lw=1.0, alpha=0.5)
-    ax.axhline(0, color=palette.goal, lw=1.0, alpha=0.7)
-    ax.axvline(0, color=palette.goal, lw=1.0, alpha=0.7)
 
     agree = float((err_j == err_n).mean())
-    label_axes(ax, xlabel="joint error", ylabel="naive error",
-               title=f"final answers (agree {agree:.0%})")
+    label_axes(ax, xlabel="joint Bayes error", ylabel="naive Bayes error",
+               title=f"error agreement ({agree:.0%})")
     return fig
 
 
@@ -1249,7 +1289,7 @@ def plot_belief_profile(
 
     ax.axhline(1.0 / n_r, color=palette.truth, ls="--", lw=1.0, alpha=0.6)
     ax.axvline(0, color=palette.goal, lw=1.2, alpha=0.7)
-    ax.text(offsets[-1], 1.0 / n_r, " chance", va="bottom", ha="right", fontsize=8)
+    ax.text(offsets[-1], 1.0 / n_r, " chance", va="bottom", ha="right", fontsize=10)
     label_axes(ax, xlabel="offset from true value", ylabel="posterior mass",
                title="final belief, aligned on truth")
     ax.grid(alpha=0.25, color=palette.grid)
@@ -1331,6 +1371,192 @@ def plot_belief_shape(
         f"belief shape ({len(batch)} episodes; density curves run first step → last)",
         fontsize=12,
     )
+    return fig
+
+
+def _final_confidence(trace: BeliefTrace) -> np.ndarray:
+    """How sure the observer is of the answer it would give, at the last step."""
+    return trace.goal_belief[:, -1].max(-1)
+
+
+def _calibration_curve(
+    confidence: np.ndarray,
+    correct: np.ndarray,
+    n_bins: int,
+    min_count: int = 20,
+) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    """Empirical accuracy within each confidence bin, plus each bin's weight.
+
+    Bins holding fewer than ``min_count`` episodes are dropped rather than
+    plotted: their accuracy is mostly sampling noise, and they land in the tails
+    where the eye is least able to discount them. ``n_bins`` can therefore be
+    raised freely as the batch grows.
+    """
+    edges = np.linspace(0.0, 1.0, n_bins + 1)
+    idx = np.clip(np.digitize(confidence, edges) - 1, 0, n_bins - 1)
+    centres, accuracy, weight = [], [], []
+    for b in range(n_bins):
+        in_bin = idx == b
+        if in_bin.sum() < min_count:
+            continue
+        centres.append(confidence[in_bin].mean())
+        accuracy.append(correct[in_bin].mean())
+        weight.append(in_bin.mean())
+    return np.array(centres), np.array(accuracy), np.array(weight)
+
+
+def _draw_calibration(
+    ax: plt.Axes,
+    batch: EpisodeBatch,
+    joint: BeliefTrace,
+    naive: BeliefTrace,
+    n_bins: int,
+    palette: Palette,
+) -> None:
+    """Accuracy against self-reported confidence, one curve per observer."""
+    chance = 1.0 / batch.cfg.n_realizations
+
+    # Labelled rather than captioned in place: the panel is drawn at two
+    # aspect ratios, and a rotated caption suits only one of them.
+    ax.plot([0, 1], [0, 1], color=palette.grid, lw=1.2, ls="--", zorder=1,
+            label="perfect calibration")
+    ax.axhline(chance, color=palette.grid, lw=2, ls=":", zorder=1)
+    ax.text(0.02, chance + 0.02, "chance", color="#999999", fontsize=10)
+
+    for trace, label in ((joint, "joint (optimal)"), (naive, "naive (factorized)")):
+        conf, acc, weight = _calibration_curve(
+            _final_confidence(trace), trace.accuracy[:, -1], n_bins
+        )
+        colour = palette.for_observer(trace.name)
+        ax.plot(conf, acc, "-", color=colour, lw=1.6, zorder=3, label=label)
+        # Marker area carries the episode count behind each point, scaled by
+        # n_bins so finer curves get thinner markers rather than a solid band.
+        ax.scatter(conf, acc, s=np.minimum(12 + 18 * n_bins * weight, 110),
+                   color=colour, edgecolor="white", lw=0.6, zorder=4)
+
+    ax.set(xlim=(0, 1), ylim=(0, 1))
+    label_axes(ax, xlabel="confidence in its own answer",
+               ylabel="how often that answer is right")
+    ax.set_title("confidence-accuracy calibration", fontsize=11)
+    ax.legend(frameon=False, fontsize=8, loc="upper left")
+    ax.grid(alpha=0.25, color=palette.grid)
+    ax.spines[["top", "right"]].set_visible(False)
+
+
+def _draw_confidence_scissor(
+    ax: plt.Axes,
+    batch: EpisodeBatch,
+    joint: BeliefTrace,
+    naive: BeliefTrace,
+    n_bins: int,
+    palette: Palette,
+) -> None:
+    """Accuracy and confidence against how much factorizing costs the episode."""
+    regret = factorization_regret(joint, naive)[:, -1]
+    chance = 1.0 / batch.cfg.n_realizations
+
+    # Rank rather than raw regret on x: the distribution has a long tail, and
+    # what matters is the ordering of episodes, not the units. Capped at the
+    # batch size, or small batches leave empty bins whose mean is NaN.
+    n_bins = max(1, min(n_bins, len(batch)))
+    bins = np.array_split(np.argsort(regret), n_bins)
+    x = np.linspace(100 / n_bins, 100, n_bins) - 50 / n_bins
+    marker = "-o" if n_bins <= 25 else "-"
+
+    ax.axhline(chance, color=palette.grid, lw=2, ls=":", zorder=1)
+    ax.text(98, chance + 0.025, "chance", color="#999999", fontsize=10, ha="right")
+
+    for trace in (joint, naive):
+        colour = palette.for_observer(trace.name)
+        conf, acc = _final_confidence(trace), trace.accuracy[:, -1]
+        ax.plot(x, [acc[b].mean() for b in bins], marker, color=colour,
+                lw=1.9, ms=4.0, zorder=3, label=f"{trace.name} accuracy")
+        ax.plot(x, [conf[b].mean() for b in bins], "--", color=colour,
+                lw=1.4, alpha=0.8, zorder=2,
+                label=f"{trace.name} confidence")
+
+    naive_acc = np.array([naive.accuracy[b, -1].mean() for b in bins])
+    naive_conf = np.array([_final_confidence(naive)[b].mean() for b in bins])
+    ax.fill_between(x, naive_acc, naive_conf, color=palette.regret, alpha=0.12,
+                    zorder=0)
+    mid = max(0, n_bins - 2)
+    ax.annotate("believes it is right\nthis often",
+                xy=(x[mid], naive_conf[mid]), xytext=(x[mid] - 30, 0.93),
+                fontsize=8, color=palette.regret, ha="center",
+                arrowprops=dict(arrowstyle="->", color=palette.regret, lw=0.9))
+    ax.annotate("actually is, this often",
+                xy=(x[mid], naive_acc[mid]), xytext=(x[mid] - 50, 0.32),
+                fontsize=8, color=palette.regret, ha="center",
+                arrowprops=dict(arrowstyle="->", color=palette.regret, lw=0.9))
+
+    ax.set(ylim=(0, 1), xlim=(0, 100))
+    label_axes(ax,
+               xlabel="episodes ranked by factorization regret  (percentile)",
+               ylabel="Confidence / accuracy")
+    ax.set_title("accuracy & confidence versus factorization regret",  fontsize=11)
+    ax.legend(frameon=False, fontsize=8, loc="lower left", ncol=2,
+              columnspacing=1.0, handlelength=1.6)
+    ax.grid(alpha=0.25, color=palette.grid)
+    ax.spines[["top", "right"]].set_visible(False)
+
+
+def plot_confidently_wrong(
+    batch: EpisodeBatch,
+    traces: Mapping[str, BeliefTrace],
+    *,
+    n_bins: int = 20,
+    palette: Palette = PALETTE,
+    figsize: tuple[float, float] = (11.0, 4.4),
+) -> Figure:
+    """Factorizing does not only cost accuracy — it costs *calibration*.
+
+    A factorized posterior is usually described as a cheaper approximation to
+    the joint one. Where the latent variables actually interact it is worse than
+    cheap: its accuracy falls below chance while its confidence stays high, so
+    nothing in its own output marks the episodes it is getting wrong.
+
+    Left: accuracy against self-reported confidence, the usual calibration view.
+    Right: both quantities against how much factorizing costs on that episode,
+    which is the axis along which the two come apart.
+    """
+    joint, naive = _observer_pair(traces)
+    fig, (left, right) = plt.subplots(1, 2, figsize=figsize, layout="constrained")
+    _draw_calibration(left, batch, joint, naive, n_bins, palette)
+    _draw_confidence_scissor(right, batch, joint, naive, n_bins, palette)
+    return fig
+
+
+def plot_factorization_cost(
+    batch: EpisodeBatch,
+    traces: Mapping[str, BeliefTrace],
+    *,
+    n_bins: int = 20,
+    n_curves: int = 6,
+    palette: Palette = PALETTE,
+    figsize: tuple[float, float] = (15, 8.8),
+) -> Figure:
+    """What factorizing costs, and why the naive observer cannot see the bill.
+
+    The top row contains the calibration and confidence scissor plots.
+    The bottom row contains :func:`plot_regret_vs_accuracy`,
+    :func:`plot_relative_accuracy`, and :func:`plot_map_agreement`.
+
+    Needs at least two active variables: the top row bins episodes by regret,
+    which is identically zero when the two observers coincide.
+    """
+    joint, naive = _observer_pair(traces)
+    fig = plt.figure(figsize=figsize, layout="constrained")
+    
+    top, bottom = fig.subfigures(2, 1, height_ratios=[1.0, 1])
+
+    axes_top = top.subplots(1, 2)
+    _draw_calibration(axes_top[0], batch, joint, naive, n_bins, palette)
+    _draw_confidence_scissor(axes_top[1], batch, joint, naive, n_bins, palette)
+
+    axes_bot = bottom.subplots(1, 3)
+    plot_regret_vs_accuracy(batch, traces, n_bins=n_bins, ax=axes_bot[0], palette=palette)
+    plot_relative_accuracy(traces, n_curves=n_curves, ax=axes_bot[1], palette=palette)
+    plot_map_agreement(batch, traces, ax=axes_bot[2], palette=palette)
     return fig
 
 

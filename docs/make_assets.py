@@ -1,11 +1,7 @@
 """Regenerate the images the README embeds.
 
     python docs/make_assets.py
-
-Seeds are pinned here deliberately. Everywhere else in this repository the
-default is ``seed=None`` so each run explores a fresh episode; these are the one
-exception, because a figure in the README should not change every time someone
-regenerates it.
+    
 """
 
 from __future__ import annotations
@@ -14,20 +10,18 @@ import argparse
 from pathlib import Path
 
 import matplotlib.pyplot as plt
+import numpy as np
 
-from coggrid import CogGridConfig, World, run_observers
+from coggrid import CogGridConfig, World, factorization_regret, run_observers
 from coggrid.viz import (
     animate_episode,
     animate_interaction_phases,
     plot_episode,
     plot_evidence_likelihood,
+    plot_factorization_cost,
     plot_interaction_phases,
-    plot_regret_analysis,
 )
 
-# Resolve the repository root without assuming __file__ exists: VS Code's
-# "run in interactive window" pastes this source into a cell rather than
-# executing the file, and a pasted cell has no __file__ at all.
 if globals().get("__file__") is not None:
     ROOT = Path(__file__).resolve().parent.parent
 else:
@@ -39,44 +33,53 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(allow_abbrev=False)
     parser.add_argument("--out", type=Path, default=ROOT / "docs" / "images")
     parser.add_argument("--batch-size", type=int, default=15000)
+    parser.add_argument("--cost-batch-size", type=int, default=500_000)
     args, _ignored = parser.parse_known_args()
     args.out.mkdir(parents=True, exist_ok=True)
-    
-    
+
     cfg = CogGridConfig(n_vars=500, n_contexts=2, n_realizations=10, seed=4)
+    
+    ###################################################
+    cost_batch = World(cfg).sample_episodes(args.cost_batch_size)
+    cost_traces = run_observers(cost_batch)
+    fig = plot_factorization_cost(cost_batch, cost_traces)
+    path = args.out / "regret_analysis.png"
+    fig.savefig(path, dpi=110, bbox_inches="tight")
+    plt.close(fig)
+    print("wrote", path, f"({path.stat().st_size / 1e3:.0f} kB)")
+    del cost_batch, cost_traces
+    ###################################################
+
     world = World(cfg)
     batch = world.sample_episodes(args.batch_size)
     traces = run_observers(batch)
 
+    regret = factorization_regret(traces["joint"], traces["naive"])[:, -1]
+    beats = traces["joint"].accuracy[:, -1] > traces["naive"].accuracy[:, -1]
+    episode = int(np.where(beats, regret, -np.inf).argmax() if beats.any()
+                  else regret.argmax())
+    print(f"episode {episode}: regret {regret[episode]:.1f} nats")
+
     for name, fig in (
-        ("episode", plot_episode(batch, traces, episode=0)),
-        ("regret_analysis", plot_regret_analysis(batch, traces)),
-        ("evidence_likelihood", plot_evidence_likelihood(batch, episode=0)),
-    ):
+        ("episode", plot_episode(batch, traces, episode=episode)),
+        ("evidence_likelihood", plot_evidence_likelihood(batch, episode=0)),):
         path = args.out / f"{name}.png"
         fig.savefig(path, dpi=110, bbox_inches="tight")
         # These are pyplot-managed, so they stay alive until closed.
         plt.close(fig)
         print("wrote", path, f"({path.stat().st_size / 1e3:.0f} kB)")
 
-    # Two figures rather than one: the still loads at once and carries the
-    # reading, and the animation below it only has to show the motion.
     fig = plot_interaction_phases(world, batch, episode=0, channels=(0,))
     path = args.out / "interaction_phases.png"
     fig.savefig(path, dpi=110, bbox_inches="tight")
     plt.close(fig)
     print("wrote", path, f"({path.stat().st_size / 1e3:.0f} kB)")
 
-    # Frames drive the file size and fps does not, so the motion is slowed by
-    # lowering fps rather than by adding frames.
     clip = animate_interaction_phases(world, batch, episode=0, n_frames=120, fps=10)
     path = clip.save(args.out / "interaction_phases_animated")
     print("wrote", path, f"({path.stat().st_size / 1e3:.0f} kB)")
 
-    # One animation per seed, numbered in order. Add a seed here and the README
-    # gains episode_animation_2.gif, and so on.
     ANIMATION_SEEDS = [37]
-
     for n, seed in enumerate(ANIMATION_SEEDS, start=1):
         anim = CogGridConfig(
             n_vars=500, n_contexts=2, n_realizations=10, n_steps=30, seed=seed)

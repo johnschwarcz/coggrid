@@ -25,13 +25,31 @@ Top: the optimal and naive observers' posteriors and their difference. Bottom: A
 
 ## Contrasting Optimal and Naive Bayes
 
+A single episode where the two observers part ways. The joint observer
+converges on the true realization of both variables; the naive one settles
+elsewhere and stays there:
+
 <p align="center">
-  <img src="docs/images/regret_analysis.png" alt="Factorization regret predicts the naive observer's failures but not the joint observer's" width="100%">
+  <img src="docs/images/episode.png" alt="One episode end to end: the joint likelihood surface, the observation stream, and each observer's belief about both variables" width="100%">
 </p>
 
-The joint observer is more likely to identify the goal variable correctly. 
-When their posteriors diverge, the naive observer becomes unreliable. 
-The naive observer is not just noisier, but it can become misaligned.
+Across a batch of episodes:
+
+<p align="center">
+  <img src="docs/images/regret_analysis.png" alt="Factorization regret predicts the naive observer's failures, and its own confidence does not" width="100%">
+</p>
+
+The top row reads those episodes from inside the observers: how often an
+answer held with a given confidence turns out to be right, and how accuracy
+and confidence move as episodes are ranked by factorization regret. The naive
+observer's confidence does not track its accuracy — where factorizing costs
+the most, its accuracy falls and its confidence does not.
+
+The bottom row is the same failure seen from outside: regret against accuracy,
+the two observers' trajectories through accuracy space, and where their final
+answers disagree. The joint observer is more likely to identify the goal
+variable correctly, and when their posteriors diverge the naive observer is
+not just noisier — it can become misaligned.
 
 ---
 
