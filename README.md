@@ -30,7 +30,7 @@ Top: the optimal and naive observers' posteriors and their difference. Bottom: A
   <img src="https://raw.githubusercontent.com/johnschwarcz/coggrid/main/docs/images/regret_analysis.png" alt="Factorization regret predicts the naive observer's failures, and its own confidence does not" width="100%">
 </p>
 
-The naive observer is not just noisier — confidence and accuracy can become misaligned.
+The naive observer is not just noisier — Factorization regret decouples confidence and accuracy.
 
 ---
 
