@@ -1435,8 +1435,7 @@ def _draw_calibration(
                    color=colour, edgecolor="white", lw=0.6, zorder=4)
 
     ax.set(xlim=(0, 1), ylim=(0, 1))
-    label_axes(ax, xlabel="confidence in its own answer",
-               ylabel="how often that answer is right")
+    label_axes(ax, xlabel="confidence", ylabel="accuracy")
     ax.set_title("confidence-accuracy calibration", fontsize=11)
     ax.legend(frameon=False, fontsize=8, loc="upper left")
     ax.grid(alpha=0.25, color=palette.grid)
@@ -1492,7 +1491,7 @@ def _draw_confidence_scissor(
     ax.set(ylim=(0, 1), xlim=(0, 100))
     label_axes(ax,
                xlabel="episodes ranked by factorization regret  (percentile)",
-               ylabel="Confidence / accuracy")
+               ylabel="Probability")
     ax.set_title("accuracy & confidence versus factorization regret",  fontsize=11)
     ax.legend(frameon=False, fontsize=8, loc="lower left", ncol=2,
               columnspacing=1.0, handlelength=1.6)
@@ -1533,30 +1532,34 @@ def plot_factorization_cost(
     n_bins: int = 20,
     n_curves: int = 6,
     palette: Palette = PALETTE,
-    figsize: tuple[float, float] = (15, 8.8),
+    figsize: tuple[float, float] = (19.3, 4.6),
 ) -> Figure:
     """What factorizing costs, and why the naive observer cannot see the bill.
 
-    The top row contains the calibration and confidence scissor plots.
-    The bottom row contains :func:`plot_regret_vs_accuracy`,
-    :func:`plot_relative_accuracy`, and :func:`plot_map_agreement`.
+    Four panels on one row: the calibration curve, the confidence scissor,
+    :func:`plot_relative_accuracy` and :func:`plot_map_agreement`.
 
-    Needs at least two active variables: the top row bins episodes by regret,
-    which is identically zero when the two observers coincide.
+    Needs at least two active variables: three of the four panels order episodes
+    by regret, which is identically zero when the two observers coincide.
     """
     joint, naive = _observer_pair(traces)
-    fig = plt.figure(figsize=figsize, layout="constrained")
-    
-    top, bottom = fig.subfigures(2, 1, height_ratios=[1.0, 1])
+    if np.ptp(factorization_regret(joint, naive)[:, -1]) < 1e-12:
+        raise ValueError(
+            "factorization regret is near-constant across episodes, so the "
+            "regret-ranked panels have nothing to order episodes by. This is "
+            "exact rather than approximate when n_contexts == 1: with one "
+            "active variable the two observers coincide and regret is "
+            "identically zero."
+        )
 
-    axes_top = top.subplots(1, 2)
-    _draw_calibration(axes_top[0], batch, joint, naive, n_bins, palette)
-    _draw_confidence_scissor(axes_top[1], batch, joint, naive, n_bins, palette)
-
-    axes_bot = bottom.subplots(1, 3)
-    plot_regret_vs_accuracy(batch, traces, n_bins=n_bins, ax=axes_bot[0], palette=palette)
-    plot_relative_accuracy(traces, n_curves=n_curves, ax=axes_bot[1], palette=palette)
-    plot_map_agreement(batch, traces, ax=axes_bot[2], palette=palette)
+    fig, axes = plt.subplots(
+        1, 4, figsize=figsize, layout="constrained",
+        width_ratios=[1.0, 1.35, 1.0, 1.0],
+    )
+    _draw_calibration(axes[0], batch, joint, naive, n_bins, palette)
+    _draw_confidence_scissor(axes[1], batch, joint, naive, n_bins, palette)
+    plot_relative_accuracy(traces, n_curves=n_curves, ax=axes[2], palette=palette)
+    plot_map_agreement(batch, traces, ax=axes[3], palette=palette)
     return fig
 
 

@@ -329,11 +329,11 @@ class TestStaticFigures:
         assert not np.isnan(drawn).any()
 
     def test_factorization_cost_stacks_both_figures(self, batch, traces):
-        """The combined figure carries all five panels, not a subset."""
+        """The combined figure carries all four panels, not a subset."""
         from coggrid.viz import plot_factorization_cost
 
         titles = [ax.get_title() for ax in plot_factorization_cost(batch, traces).axes]
-        for panel in ("calibration", "factorization regret", "regret vs performance",
+        for panel in ("calibration", "factorization regret",
                       "relative performance", "error agreement"):
             assert any(panel in t for t in titles), panel
 
@@ -383,7 +383,7 @@ class TestContextCounts:
         assert plot_factorization_cost(b, t).axes
 
     def test_combined_cost_figure_needs_more_than_one_variable(self):
-        """Its top row bins by regret, which is identically zero for one."""
+        """Three of its panels rank by regret, which is identically zero for one."""
         from coggrid.viz import plot_factorization_cost
 
         b, t = self._episode(1)
