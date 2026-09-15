@@ -1,6 +1,6 @@
 """Play an episode back, and extend the playback with your own panel.
 
-    python examples/05_animation.py --out figures/
+    python examples/05_animation.py --out docs/images/
 
 In a notebook you do not need this script at all — ``animate_episode`` plays
 itself as the last expression in a cell::
@@ -22,7 +22,7 @@ if __name__ == "__main__":
     # allow_abbrev=False so Jupyter's own `--f=...kernel.json` cannot
     # prefix-match an option here and die converting a path to int.
     parser = argparse.ArgumentParser(allow_abbrev=False)
-    parser.add_argument("--out", type=Path, default=Path("figures"))
+    parser.add_argument("--out", type=Path, default=Path("docs/images"))
     parser.add_argument("--episode", type=int, default=0)
     parser.add_argument("--fps", type=int, default=6)
     parser.add_argument("--contexts", type=int, default=2)

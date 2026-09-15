@@ -1,6 +1,6 @@
 """Generate the standard diagnostic figures.
 
-    python examples/04_figures.py --out figures/
+    python examples/04_figures.py --out docs/images/
 
 Also safe to ``%run`` from a notebook: unrecognized arguments are ignored, so
 Jupyter's own ``--f=...kernel.json`` does not trip the parser.
@@ -15,7 +15,7 @@ from coggrid.viz import summary_figure
 # allow_abbrev=False so Jupyter's own `--f=...kernel.json` cannot prefix-match
 # a future option here the way it matches `--fps` in 05_animation.py.
 parser = argparse.ArgumentParser(allow_abbrev=False)
-parser.add_argument("--out", type=Path, default=Path("figures"))
+parser.add_argument("--out", type=Path, default=Path("docs/images"))
 parser.add_argument("--batch-size", type=int, default=15000)
 parser.add_argument("--seed", type=int, default=None)
 args, _ignored = parser.parse_known_args()

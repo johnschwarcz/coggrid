@@ -27,7 +27,7 @@ Top: the optimal and naive observers' posteriors and their difference. Bottom: A
 ## Contrasting Optimal and Naive Bayes
 
 <p align="center">
-  <img src="https://raw.githubusercontent.com/johnschwarcz/coggrid/main/docs/images/regret_analysis.png" alt="Factorization regret predicts the naive observer's failures, and its own confidence does not" width="100%">
+  <img src="https://raw.githubusercontent.com/johnschwarcz/coggrid/main/docs/images/factorization_cost.png" alt="Factorization regret predicts the naive observer's failures, and its own confidence does not" width="100%">
 </p>
 
 The naive observer is not just noisier — Factorization regret decouples confidence and accuracy.
@@ -275,7 +275,7 @@ figures = summary_figure(batch, traces)   # -> 4 figures, narrowing in scope
 - **`plot_performance`** — batch-averaged curves, one column per metric
   (accuracy, `p_correct`, MSE, factorization regret), with individual episode
   trajectories behind each mean.
-- **`plot_regret_analysis`** — whether regret explains the gap (shown above).
+- **`plot_regret_analysis`** — whether regret explains the gap.
 - **`plot_belief_shape`** — the posteriors behind the accuracy numbers: the mean
   final belief with every episode aligned on its true value, and the
   distribution of `P(true value)` across episodes at each timestep.
@@ -298,7 +298,7 @@ configure:
 from coggrid.viz import animate_episode
 
 animate_episode(batch, traces)                            # plays inline
-animate_episode(batch, traces).save("figures/episode")    # or write a GIF
+animate_episode(batch, traces).save("docs/images/episode")   # or write a GIF
 animate_episode(batch, traces).to_html()                  # or a scrub player
 ```
 
@@ -344,8 +344,8 @@ the derived arrays panels keep needing (`joint_grid`, `naive_grid`,
 `observations`, `truth`, `goal_regret`, `disentanglement`).
 
 ```bash
-python examples/04_figures.py --out figures/     # the four static figures
-python examples/05_animation.py --out figures/   # an episode played back, as a GIF
+python examples/04_figures.py --out docs/images/     # the four static figures
+python examples/05_animation.py --out docs/images/   # an episode played back, as a GIF
 ```
 
 ---

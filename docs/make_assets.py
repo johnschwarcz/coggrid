@@ -43,7 +43,7 @@ if __name__ == "__main__":
     cost_batch = World(cfg).sample_episodes(args.cost_batch_size)
     cost_traces = run_observers(cost_batch)
     fig = plot_factorization_cost(cost_batch, cost_traces)
-    path = args.out / "regret_analysis.png"
+    path = args.out / "factorization_cost.png"
     fig.savefig(path, dpi=110, bbox_inches="tight")
     plt.close(fig)
     print("wrote", path, f"({path.stat().st_size / 1e3:.0f} kB)")
