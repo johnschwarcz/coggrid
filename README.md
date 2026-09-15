@@ -26,16 +26,6 @@ Top: the optimal and naive observers' posteriors and their difference. Bottom: A
 
 ## Contrasting Optimal and Naive Bayes
 
-A single episode where the two observers part ways. The joint observer
-converges on the true realization of both variables; the naive one settles
-elsewhere and stays there:
-
-<p align="center">
-  <img src="https://raw.githubusercontent.com/johnschwarcz/coggrid/main/docs/images/episode.png" alt="One episode end to end: the joint likelihood surface, the observation stream, and each observer's belief about both variables" width="100%">
-</p>
-
-Across a batch of episodes:
-
 <p align="center">
   <img src="https://raw.githubusercontent.com/johnschwarcz/coggrid/main/docs/images/regret_analysis.png" alt="Factorization regret predicts the naive observer's failures, and its own confidence does not" width="100%">
 </p>
