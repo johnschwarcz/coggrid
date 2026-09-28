@@ -28,6 +28,7 @@ import matplotlib.pyplot as plt  # noqa: E402
 from coggrid import (  # noqa: E402
     CogGridConfig,
     CogGridEnv,
+    EpisodeBatch,
     World,
 )
 
@@ -151,6 +152,19 @@ def test_config_table_matches_the_dataclass():
         assert _same_default(shown, actual[name]), (
             f"{name}: README says {shown!r}, actual default is {actual[name]!r}"
         )
+
+
+def test_batch_table_matches_the_dataclass():
+    """Every EpisodeBatch field documented, and every documented field real."""
+    documented = _table_rows("| Field | Shape | Meaning |")
+    if not documented:
+        pytest.skip("README has no batch table")
+    actual = {f.name for f in dataclasses.fields(EpisodeBatch)}
+
+    assert set(documented) == actual, (
+        f"undocumented: {sorted(actual - set(documented))}; "
+        f"invented: {sorted(set(documented) - actual)}"
+    )
 
 
 def test_environment_table_matches_the_constructors():

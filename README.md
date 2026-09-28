@@ -56,6 +56,34 @@ Each episode:
 3. **Likelihood.** Active variables interact through key/query embeddings which map to an `n_realizations`^`n_contexts` likelihood.
 5. **Observations.** `n_steps` i.i.d. observations sampled stochastically from the likelihood / prob. of observing 1 aka 1 - prob. of observing 0.
 
+### What's in a batch
+
+`sample_episodes` returns an `EpisodeBatch`: every episode fully sampled, answers
+included. Every array shares a leading `batch_size` axis.
+
+| Field | Shape | Meaning |
+| --- | --- | --- |
+| `cfg` | — | The `CogGridConfig` the episodes were drawn from. |
+| `split` | — | `"train"` or `"held_out"` — which variable pool the contexts came from. |
+| `ctx_inds` | `(batch_size, n_contexts)` | Indices of the active variables, sorted. |
+| `goal_ind` | `(batch_size,)` | Which column of `ctx_inds` is the goal. |
+| `ctx_vals` | `(batch_size, n_contexts)` | The realization each active variable took. |
+| `goal_value` | `(batch_size,)` | The goal variable's realization — the quantity to infer. |
+| `observations` | `(batch_size, n_steps, n_observations)` | The boolean observation stream. |
+| `rates` | `(batch_size, n_observations, n_realizations, ...)` | The joint likelihood: a Bernoulli rate for every joint realization, with one `n_realizations` axis per context. What the joint observer uses. |
+| `marginal_rates` | `(batch_size, n_observations, n_contexts, n_realizations)` | The same after assuming the active variables are independent. What the naive observer uses. |
+| `true_rates` | `(batch_size, n_observations)` | `rates` at `ctx_vals` — the rates that actually generated `observations`. |
+| `interactions` | `(batch_size, n_observations, k)` | Raw interaction strengths, one per ordered pair of active variables. Kept for analysis. |
+
+A learning agent should see only `ctx_inds`, `goal_ind` and `observations` —
+exactly what the [Gymnasium interface](#gymnasium-interface) serves as
+`active_vars`, `goal_context` and `observation` — and be scored against
+`goal_value`. The rest is the answer key.
+
+`batch.select(index)` returns a sub-batch (an int keeps the batch axis), and
+`batch.save(path)` / `EpisodeBatch.load(path)` round-trip it through a compressed
+`.npz`, config included.
+
 ### Interactions shift the joint likelihood in latent space
 
 The inner product of one variable's key with the other's query sets a *phase* that translates an "XOR"-like pattern.
@@ -404,7 +432,7 @@ src/coggrid/
 │                   swappable generative-stage signatures
 ├── observers.py    ideal-observer baselines, factorization regret,
 │                   dis-entanglement
-├── env.py          Gymnasium single and vector environments
+├── env.py          CogGridEnv, the Gymnasium environment
 └── viz/            plotting and animation
 examples/           five runnable scripts
 docs/make_assets.py regenerates the images in this README

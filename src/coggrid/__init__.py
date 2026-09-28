@@ -27,7 +27,7 @@ Layout
 ``world``        :class:`World`, :class:`EpisodeBatch`, and the five swappable
                  generative-stage signatures.
 ``observers``    Ideal-observer baselines and metrics.
-``env``          Gymnasium single and vector environments.
+``env``          :class:`CogGridEnv`, the Gymnasium environment.
 ``viz``          Plotting. Every function returns a figure; none call ``show()``.
 """
 
