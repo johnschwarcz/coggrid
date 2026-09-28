@@ -58,8 +58,7 @@ Each episode:
 
 ### What's in a batch
 
-`sample_episodes` returns an `EpisodeBatch`: every episode fully sampled, answers
-included. Every array shares a leading `batch_size` axis.
+`sample_episodes` returns an `EpisodeBatch`:
 
 | Field | Shape | Meaning |
 | --- | --- | --- |
@@ -70,19 +69,14 @@ included. Every array shares a leading `batch_size` axis.
 | `ctx_vals` | `(batch_size, n_contexts)` | The realization each active variable took. |
 | `goal_value` | `(batch_size,)` | The goal variable's realization — the quantity to infer. |
 | `observations` | `(batch_size, n_steps, n_observations)` | The boolean observation stream. |
-| `rates` | `(batch_size, n_observations, n_realizations, ...)` | The joint likelihood: a Bernoulli rate for every joint realization, with one `n_realizations` axis per context. What the joint observer uses. |
-| `marginal_rates` | `(batch_size, n_observations, n_contexts, n_realizations)` | The same after assuming the active variables are independent. What the naive observer uses. |
+| `rates` | `(batch_size, n_observations, n_realizations, ...)` | The Bernoulli rate of an observation for every joint realization. |
+| `marginal_rates` | `(batch_size, n_observations, n_contexts, n_realizations)` | The same for each variable's realizations after marginalizing over all others. |
 | `true_rates` | `(batch_size, n_observations)` | `rates` at `ctx_vals` — the rates that actually generated `observations`. |
-| `interactions` | `(batch_size, n_observations, k)` | Raw interaction strengths, one per ordered pair of active variables. Kept for analysis. |
+| `interactions` | `(batch_size, n_observations, k)` | Raw interaction terms, one per ordered pair of active variables. |
 
-A learning agent should see only `ctx_inds`, `goal_ind` and `observations` —
-exactly what the [Gymnasium interface](#gymnasium-interface) serves as
-`active_vars`, `goal_context` and `observation` — and be scored against
-`goal_value`. The rest is the answer key.
+A learning agent should see only `ctx_inds`, `goal_ind` and `observations` (and optionally `interactions` if they are not to be learned).
 
-`batch.select(index)` returns a sub-batch (an int keeps the batch axis), and
-`batch.save(path)` / `EpisodeBatch.load(path)` round-trip it through a compressed
-`.npz`, config included.
+`batch.select(index)` returns a sub-batch, `batch.save(path)` / `EpisodeBatch.load(path)` round-trip it through a compressed `.npz`.
 
 ### Interactions shift the joint likelihood in latent space
 
