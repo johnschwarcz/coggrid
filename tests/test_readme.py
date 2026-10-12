@@ -56,8 +56,9 @@ def _same_default(shown: str, actual: object) -> bool:
     expected = "None" if actual is None else str(actual)
     return shown.translate(normalise) == expected.translate(normalise)
 
-#: Blocks that are deliberately illustrative rather than runnable.
-SKETCHES = ("def codebook_embeddings",)
+#: Blocks that are deliberately illustrative rather than runnable; a GPU snippet
+#: needs a GPU (tests/test_torch.py covers that path).
+SKETCHES = ("def codebook_embeddings", 'device="cuda"')
 
 #: Shrink the worked example so the suite stays quick. Anything here must keep
 #: the block's *meaning*: only sizes change, never the API being demonstrated.
@@ -65,7 +66,7 @@ SHRINK = {
     "sample_episodes(4096)": "sample_episodes(20)",
     "sample_episodes(2000)": "sample_episodes(40)",
     "sample_episodes(1000,": "sample_episodes(20,",
-    "n_vars=500": "n_vars=60",
+    "n_vars=500": "n_vars=200",  # 20 held-out variables, for 16 contexts
 }
 
 
@@ -200,24 +201,17 @@ def test_no_environment_argument_is_left_undocumented():
 # --------------------------------------------------------------------------- #
 # specific claims the prose makes
 # --------------------------------------------------------------------------- #
-def test_world_argument_overrides_config():
+def test_world_argument_overrides_cfg():
     world = World(CogGridConfig(n_vars=60, seed=1))
     env = CogGridEnv(CogGridConfig(n_vars=444), world=world)
     assert env.cfg.n_vars == 60
 
 
-@pytest.mark.parametrize("mode,expected", [("ansi", str), (None, type(None))])
-def test_render_mode_behaves_as_documented(mode, expected):
-    env = CogGridEnv(config=CogGridConfig(n_vars=60, seed=0), render_mode=mode)
-    env.reset()
-    assert isinstance(env.render(), expected)
-
-
 def test_expose_likelihood_is_off_by_default():
     cfg = CogGridConfig(n_vars=60, seed=0)
-    assert "rates" not in CogGridEnv(config=cfg).reset()[1]
-    info = CogGridEnv(config=cfg, expose_likelihood=True).reset()[1]
-    assert "rates" in info and "marginal_rates" in info
+    assert "joint_likelihood" not in CogGridEnv(cfg=cfg).reset()[1]
+    info = CogGridEnv(cfg=cfg, expose_likelihood=True).reset()[1]
+    assert "joint_likelihood" in info and "marginal_likelihood" in info
 
 
 def test_every_referenced_image_exists():

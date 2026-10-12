@@ -54,7 +54,7 @@ Each episode:
 2. **Realizations.** Each "active" variable in the context takes one of `n_realizations` discrete
    values.
 3. **Likelihood.** Active variables interact through key/query embeddings which map to an `n_realizations`^`n_contexts` likelihood.
-5. **Observations.** `n_steps` i.i.d. observations sampled stochastically from the likelihood / prob. of observing 1 aka 1 - prob. of observing 0.
+4. **Observations.** `n_steps` i.i.d. observations sampled stochastically from the likelihood / prob. of observing 1 aka 1 - prob. of observing 0.
 
 ### What's in a batch
 
@@ -67,12 +67,12 @@ Each episode:
 | `ctx_inds` | `(batch_size, n_contexts)` | Indices of the active variables, sorted. |
 | `goal_ind` | `(batch_size,)` | Which column of `ctx_inds` is the goal. |
 | `ctx_vals` | `(batch_size, n_contexts)` | The realization each active variable took. |
-| `goal_value` | `(batch_size,)` | The goal variable's realization — the quantity to infer. |
+| `goal_val` | `(batch_size,)` | The goal variable's realization — the quantity to infer. |
 | `observations` | `(batch_size, n_steps, n_observations)` | The boolean observation stream. |
-| `rates` | `(batch_size, n_observations, n_realizations, ...)` | The Bernoulli rate of an observation for every joint realization. |
-| `marginal_rates` | `(batch_size, n_observations, n_contexts, n_realizations)` | The same for each variable's realizations after marginalizing over all others. |
-| `true_rates` | `(batch_size, n_observations)` | `rates` at `ctx_vals` — the rates that actually generated `observations`. |
-| `interactions` | `(batch_size, n_observations, k)` | Raw interaction terms, one per ordered pair of active variables. |
+| `joint_likelihood` | `(batch_size, n_observations, n_realizations, ...)` | `P(observation = 1)` given each joint realization — what the joint observer uses. `None` with `expose_likelihood=False`. |
+| `marginal_likelihood` | `(batch_size, n_observations, n_contexts, n_realizations)` | The same for each variable's realizations after marginalizing over all others — what the naive observer uses. `None` with `expose_likelihood=False`. |
+| `p_obs__vals` | `(batch_size, n_observations)` | `P(observation = 1)` given `ctx_vals` (read `__` as "given"): `joint_likelihood` at `ctx_vals`, what actually generated `observations`. |
+| `interactions` | `(batch_size, n_observations, k)` | Interaction phases `z`, one per ordered pair of active variables: `k = n_contexts * (n_contexts - 1)`, or 1 with a single context. |
 
 A learning agent should see only `ctx_inds`, `goal_ind` and `observations` (and optionally `interactions` if they are not to be learned).
 
@@ -89,16 +89,16 @@ The inner product of one variable's key with the other's query sets a *phase* th
 
 Reading left to right:
 1. **Embeddings.** Each latent variable carries a **key** and a **query** vector
-   per channel. The angle between one variable's key and the other's query gives a score `z`. 
-2. **Phase.**  Each score shifts a standard sinusoid by `−2π · likelihood_freq · z`. 
-3. **The standard pattern**, Sinasoids are expanded to a repeating pattern through an outer product.
-4. **The selected pattern**  A specific pair of scores defines a specific region of the pattern.
+   per channel. The angle between one variable's key and the other's query gives an interaction phase `z`. 
+2. **Phase.**  Each phase shifts a standard sinusoid by `−2π · likelihood_freq · z`. 
+3. **The standard pattern**, Sinusoids are expanded to a repeating pattern through an outer product.
+4. **The selected pattern**  A specific pair of phases defines a specific region of the pattern.
 
 ### Impact of rotating the embeddings
-Turning the keys sweeps the scores, and every panel to the right follows:
+Turning the keys sweeps the phases, and every panel to the right follows:
 
 <p align="center">
-  <img src="https://raw.githubusercontent.com/johnschwarcz/coggrid/main/docs/images/interaction_phases_animated.gif" alt="Turning a variable's key sweeps its interaction score, sliding the selected region across the standard pattern" width="100%">
+  <img src="https://raw.githubusercontent.com/johnschwarcz/coggrid/main/docs/images/interaction_phases_animated.gif" alt="Turning a variable's key sweeps its interaction phase, sliding the selected region across the standard pattern" width="100%">
 </p>
 
 Note: This is meant to demonstrate how embeddings impact the likelihood. Embeddings are never actually rotated.
@@ -113,10 +113,10 @@ plot_evidence_likelihood(batch, episode=0)
 
 The agent sees a **vector** of
 `n_observations`  at once, and its likelihood is the product of the
-per-channel rates.
+per-channel likelihoods.
 
 <p align="center">
-  <img src="https://raw.githubusercontent.com/johnschwarcz/coggrid/main/docs/images/evidence_likelihood.png" alt="Per-channel rate tables, and the posterior induced by every possible observation vector" width="100%">
+  <img src="https://raw.githubusercontent.com/johnschwarcz/coggrid/main/docs/images/evidence_likelihood.png" alt="Per-channel likelihood tables, and the posterior induced by every possible observation vector" width="100%">
 </p>
 
 
@@ -137,14 +137,27 @@ traces["joint"].final()   # {'accuracy': ..., 'p_correct': ..., 'mse': ...}
 traces["naive"].final()   # the same three, for the factorized observer
 ```
 
+### How the pieces fit together
+
+| Piece | What it is |
+| --- | --- |
+| `CogGridConfig` | Every parameter, validated and immutable. |
+| `World` | A config plus the variables' key/query embeddings, drawn once. `world.sample_episodes(n)` draws `n` complete episodes at once. |
+| `EpisodeBatch` | What `sample_episodes` returns: the episodes as arrays — which variables were active, their values, every step's observations, and the likelihood tables. |
+| `run_observers` | The ideal observers: take an `EpisodeBatch`, return each observer's beliefs and scores at every step. |
+| `CogGridEnv` | The same episodes served one step at a time, for Gymnasium agents. It calls `world.sample_episodes()` internally and hands out one episode per `reset()`. |
+
+To train a network, or to run the observers, work with batches from `world.sample_episodes`. `CogGridEnv` is only for agents written against the Gymnasium step-by-step interface.
+
 ## Install
 
 ```bash
 pip install coggrid          # core
-pip install "coggrid[viz]"   # + matplotlib and seaborn for the figures
+pip install "coggrid[viz]"   # + matplotlib for the figures
+pip install "coggrid[torch]" # + optional CUDA acceleration of the joint observer
 ```
 
-Python 3.10+. No compiled extensions, no GPU, any OS.
+Python 3.10+. No compiled extensions, no GPU needed, any OS.
 
 From source, for development:
 
@@ -167,20 +180,19 @@ pytest
 | `n_observations` | 5 | Binary observation channels. |
 | `n_steps` | 30 | Observation samples per episode — the horizon. |
 | `embedding_dim` | 30 | Length of each key/query vector. Must be ≥ `n_observations`, since they are orthogonalized across channels. |
-| `likelihood_temp` | 2.0 | Scales the potentials before the sigmoid. Higher pushes rates towards 0/1, making single observations more informative. |
-| `likelihood_freq` | 1.0 | Periods in the value profile. Higher partitions the realization axis more finely. |
-| `batch_size` | 1000 | Default batch size for `sample_episodes`. |
+| `likelihood_temp` | 2.0 | Amplitude of the sinusoids. Higher pushes the likelihood towards 0/1, making single observations more informative. |
+| `likelihood_freq` | 1.0 | Number of periods in each sinusoid. Higher partitions the realization axis more finely. |
+| `batch_size` | 1000 | Episodes per `sample_episodes` call by default, and per `CogGridEnv` refill. |
 | `n_held_out_vars` | `None` | Size of the held-out pool. `None` means `n_vars // 10`. Held-out variables are `range(n_held_out_vars)`. |
-| `subsample_vars` | `None` | If set, draw contexts from a random subset of this size within each split. |
-| `allow_repeated_vars` | `True` | Whether one episode may activate the same variable twice. |
+| `allow_repeated_vars` | `False` | Whether one episode may activate the same variable twice. Two slots holding one variable can't be told apart, so a goal among them would be unidentifiable. When `False`, `n_contexts` may not exceed the smaller of the two pools. |
 | `seed` | `None` | Seed for the default RNG. `None` means a fresh world each run. |
 
 ### The two baselines
 
 | Observer | Uses | Meaning |
 | --- | --- | --- |
-| `joint` | `batch.rates` — the full interaction table | Bayes-optimal. The ceiling. |
-| `naive` | `batch.marginal_rates` — interactions averaged away | Exactly the joint observer with the interactions removed, and nothing else changed. |
+| `joint` | `batch.joint_likelihood` — the likelihood of every joint realization, interactions intact | Bayes-optimal. The ceiling. |
+| `naive` | `batch.marginal_likelihood` — interactions averaged away | Exactly the joint observer with the interactions removed, and nothing else changed. |
 
 Both run in log space with a cumulative sum rather than a per-step
 multiply-and-renormalize, so neither underflows at long horizons (tested to
@@ -202,8 +214,8 @@ disentanglement(traces["joint"], traces["naive"], batch) # (batch_size, n_steps)
 ([§3.1](https://arxiv.org/abs/2603.27134)) — measures the cost of factorizing inference of interacting latent variables.
 
 **Dis-entanglement** ([§B.3](https://arxiv.org/abs/2603.27134)) quantifies the 'history-dependence' of an observation, 
-by measuring the divergence between the naive marginal belief update `p(o_t | r)` 
-and the optimal marginal belief update `p(o_t | r, o_1:t-1)`. 
+by measuring the divergence between the naive marginal likelihood `p(o_t | r)` 
+and the optimal, history-conditioned one `p(o_t | r, o_1:t-1)`. 
 It is zero when marginal belief dynamics are Markovian.
 
 
@@ -217,6 +229,8 @@ world.sample_episodes(1000, split="held_out")   # every active variable novel
 `"train"` is the condition under which a subset of the variables are never the
 goal and never co-occur. `"held_out"` is the condition where no variable in the
 episode has been a goal, nor co-occurred, during training. This is specifically relevant for training and evaluating networks.
+With `n_contexts=1` there is no split: an episode's only variable is its goal, so
+training covers every variable, held-out ones included.
 
 ---
 
@@ -232,25 +246,27 @@ for _ in range(env.cfg.n_steps):
     obs, reward, terminated, truncated, info = env.step(my_agent(obs))
 ```
 
-**obs** — a dict:
+**obs** — a dict; `ctx_inds` and `goal_ind` are named as in `EpisodeBatch`:
 
 | Key | Shape | Meaning |
 | --- | --- | --- |
-| `observation` | `(n_observations,)` int8 | Fresh binary sample each step. |
-| `active_vars` | `(n_contexts,)` int64 | Which latent variables are active. Constant within an episode. |
-| `goal_context` | scalar int | Which column of `active_vars` you are scored on. |
+| `observation` | `(n_observations,)` int8 | Fresh binary sample each step (the terminal step repeats the last one). |
+| `ctx_inds` | `(n_contexts,)` int64 | Which latent variables are active. Constant within an episode. |
+| `goal_ind` | scalar int | Which column of `ctx_inds` you are scored on. |
 
-`active_vars` holds *indices*, not embeddings — learning an embedding per index
-from experience is the point of the task. At test time those indices have never
-been seen.
+`ctx_inds` holds *indices*, not embeddings — learning an embedding per index
+from experience is the point of the task. At test time none of them has been a
+goal, nor co-occurred, during training (see [Train / held-out splits](#train--held-out-splits)).
+
+**info** — `step`, `split`, and the episode's `goal_val`, `ctx_vals` and `p_obs__vals`, named as in `EpisodeBatch`;
+`correct` after `step()`; `joint_likelihood` and `marginal_likelihood` only with `expose_likelihood=True`.
 
 **Action** — `Discrete(n_realizations)`: the agent's current guess (MAP) of the goal
 variable's value.
 
-**Reward** — 1.0 for a correct guess, every step (`reward_mode="dense"`) or only
-on the last step (`reward_mode="terminal"`).
+**Reward** — 1.0 for a correct guess, only on the last step (`reward_mode="terminal"`, the default) or on every step (`reward_mode="dense"`).
 
-Episodes end with `terminated=True`, not `truncated=True`.
+Every episode runs `n_steps` steps and ends with `terminated=True`. `truncated` is part of the Gymnasium API and is always `False`.
 
 `coggrid.env.register()` adds `CogGrid-v0` to the Gymnasium registry.
 
@@ -258,14 +274,12 @@ Episodes end with `terminated=True`, not `truncated=True`.
 
 | Argument | Default | Meaning |
 | --- | --- | --- |
-| `config` | `None` | The world specification, per the table above. `None` builds a default `CogGridConfig()`. |
-| `world` | `None` | Draw from an existing `World` instead of building one, so several environments share embeddings and therefore the same split. Overrides `config`. |
-| `split` | `"held_out"` | Which variable pool episodes come from — see below. |
-| `reward_mode` | `"dense"` | `"dense"` scores every step, `"terminal"` only the last. |
-| `buffer_size` | 256 | Episodes generated per internal refill. Sampling in blocks is much cheaper than one at a time; larger uses more memory. |
-| `expose_likelihood` | `False` | Put the joint and marginal rate tables in `info` — what an ideal-observer baseline needs, and what a learning agent must not see. |
-| `render_mode` | `None` | `"ansi"` makes `render()` return a text summary of the current step. |
-| `seed` | `None` | Seeds the world's embeddings and the episode stream. `None` means fresh episodes each run. |
+| `cfg` | `None` | The world specification, per the table above. `None` builds a default `CogGridConfig()`. |
+| `world` | `None` | Draw from an existing `World` instead of building one, so several environments share embeddings and therefore the same split. Overrides `cfg`. |
+| `split` | `"held_out"` | Which variable pool episodes come from — see [Train / held-out splits](#train--held-out-splits). |
+| `reward_mode` | `"terminal"` | `"terminal"` scores only the last step, `"dense"` every step. |
+| `expose_likelihood` | `False` | Put the joint and marginal likelihood tables in `info` — what an ideal-observer baseline needs, and what a learning agent must not see. When `False`, the tables are never built (see [Scaling up](#scaling-up)). |
+| `seed` | `None` | Seeds the episode stream, and the embeddings when the env builds its own world. `None` falls back to `cfg.seed`. |
 
 ### Batched rollouts
 
@@ -276,15 +290,14 @@ rollout = world.sample_episodes(4096)      # every episode at once
 rollout.observations                       # (4096, n_steps, n_observations)
 ```
 
-`sample_episodes` builds the whole batch with one vectorized einsum over the
-joint likelihood, which is the cheap path. A gym wrapper around it would only add
+`sample_episodes` builds the whole batch at once, vectorized, which is the cheap path. A gym wrapper around it would only add
 a step-by-step interface on top of data that is already complete.
 
 ---
 
 ## Visualization
 
-Every plotting function takes data, returns a `Figure`, and never calls `show()`.
+The `plot_*` functions return a `Figure` and the `animate_*` functions an animation; nothing calls `show()`.
 
 ```python
 from coggrid.viz import summary_figure
@@ -292,8 +305,7 @@ from coggrid.viz import summary_figure
 figures = summary_figure(batch, traces)   # -> 4 figures, narrowing in scope
 ```
 
-- **`plot_episode`** — one episode's rate surface beside its belief traces (shown
-  above).
+- **`plot_episode`** — one episode's likelihood surface beside its belief traces.
 - **`plot_performance`** — batch-averaged curves, one column per metric
   (accuracy, `p_correct`, MSE, factorization regret), with individual episode
   trajectories behind each mean.
@@ -329,15 +341,14 @@ over time underneath:
 
 | Row | Panels |
 | --- | --- |
-| `GRID_PANELS` | `joint`, `naive (factorized)`, and `joint − naive` — where factorizing moves probability mass. Each marks the truth in green and the observer's current mode with a white ring, and the axes name which variable is the **goal** (green) and which is **context** (orange). |
+| `GRID_PANELS` | `joint`, `naive (factorized)`, and `joint − naive` — where factorizing moves probability mass. Each marks the truth in green, `joint` and `naive` ring their current mode in white, and the axes name which variable is the **goal** (green) and which is **context** (orange). |
 | `TRACE_PANELS` | the evidence stream, revealed up to the current step |
 
 `animate_episode` takes `episode` (which episode to play, default 0), `fps`
 (playback speed, default 6), and two arguments that decide what is drawn:
 
-- **`extended=True`** — used for the animation at the top of this page — adds the
-  goal variable's marginal belief and two panels relating factorization regret to
-  dis-entanglement, one accumulating and one per step.
+- **`extended=True`** adds the goal variable's marginal belief and two panels
+  relating factorization regret to dis-entanglement, one accumulating and one per step.
 - **`panels`** — a list of rows, each row a list of panel functions, replacing the
   default layout entirely. This is the extension point below.
 
@@ -363,7 +374,7 @@ animate_episode(batch, traces, panels=[GRID_PANELS, [*TRACE_PANELS, p_correct_pa
 
 `view` is an `EpisodeView` — the batch, traces, episode index and palette, plus
 the derived arrays panels keep needing (`joint_grid`, `naive_grid`,
-`observations`, `truth`, `goal_regret`, `disentanglement`).
+`observations`, `ctx_vals`, `goal_regret`, `disentanglement`).
 
 ```bash
 python examples/04_figures.py --out docs/images/     # the four static figures
@@ -374,8 +385,7 @@ python examples/05_animation.py --out docs/images/   # an episode played back, a
 
 ## Customizing the generative model
 
-Five stages are swappable. Pass a function to `World`; you never edit the
-library.
+The embeddings, which set how latent variables relate to each other, are swappable: pass your own function to `World`; you never edit the library.
 
 ```python
 def codebook_embeddings(cfg, rng):
@@ -385,17 +395,7 @@ def codebook_embeddings(cfg, rng):
 world = World(cfg, embeddings=codebook_embeddings)
 ```
 
-| Argument | Signature | Replace it to change |
-| --- | --- | --- |
-| `embeddings` | `EmbeddingSource` | How latent variables relate to each other |
-| `contexts` | `ContextSampler` | Which variables are active; the split structure |
-| `likelihood` | `LikelihoodModel` | The *form* of the interaction (e.g. add a 3-way term) |
-| `realizations` | `RealizationSampler` | The prior over latent values |
-| `observations` | `ObservationModel` | Non-stationary, correlated or continuous observations |
-
-Signatures are at the top of [`src/coggrid/world.py`](https://github.com/johnschwarcz/coggrid/blob/main/src/coggrid/world.py).
-Because each returns its outputs rather than mutating shared state, a replacement
-can be unit-tested on its own.
+`EmbeddingSource`, the signature, is at the top of [`src/coggrid/world.py`](https://github.com/johnschwarcz/coggrid/blob/main/src/coggrid/world.py); [`examples/03_customize.py`](https://github.com/johnschwarcz/coggrid/blob/main/examples/03_customize.py) is a complete example.
 
 ---
 
@@ -407,12 +407,55 @@ That last term grows fast, so check before you run:
 ```python
 >>> print(CogGridConfig(n_contexts=4, n_realizations=20).memory_report(1000))
 1000 episodes x 5 channels x 20^4 realizations
-  joint likelihood : 6.0 GiB
-  joint belief     : 35.8 GiB
-  peak (approx)    : 41.7 GiB
+  joint likelihood    : 6.0 GiB
+  joint log posterior : 35.8 GiB
+  peak (approx)       : 41.7 GiB
 ```
 
-A `ResourceWarning` fires automatically above 2 GiB.
+A `ResourceWarning` fires when `sample_episodes` builds a joint likelihood above 2 GiB.
+The observers' log posterior is not checked; `keep_log_posterior=False` holds only a chunk of it at a time.
+
+---
+
+## Scaling up
+
+An episode needs only `p_obs__vals`, the probabilities at the realization that
+occurred; the `n_realizations ** n_contexts` tables are for the ideal observers.
+`expose_likelihood=False` skips them and gives bit-for-bit the same episodes at `O(n_contexts²)` each:
+on one thread, 1000 take milliseconds at 2 contexts and under a second at 16. The
+observers and figures rebuild the tables they need, a few episodes at a time.
+
+```python
+from coggrid import CogGridConfig, World, run_observers
+
+many = World(CogGridConfig(n_vars=500, n_contexts=16, seed=0))
+episodes = many.sample_episodes(1000, expose_likelihood=False)   # 10^16-wide tables: skipped
+
+world = World(CogGridConfig(n_vars=500, n_contexts=4, seed=0))
+traces = run_observers(world.sample_episodes(1000, expose_likelihood=False))
+```
+
+With many contexts the likelihood saturates. At the default
+`likelihood_temp=2.0`, about 0.6% of `p_obs__vals` are exactly 0 or 1 at 8 contexts,
+20% at 12, 55% at 16 and 99% at 32. Lowering `likelihood_temp` removes the
+saturation but not the drift: the mean logit grows with the number of pairs, so
+at 16 contexts even `likelihood_temp=0.6` leaves 89% of observations reading 1.
+
+With `pip install "coggrid[torch]"` the joint observer can run on a CUDA GPU
+(not Apple's MPS, which has no float64), only when asked; coggrid itself never
+needs torch.
+
+```python
+from coggrid.torch import joint_belief
+
+episodes = world.sample_episodes(1000, expose_likelihood=False)
+traces = run_observers(episodes, device="cuda", keep_log_posterior=False)
+belief, goal_belief = joint_belief(episodes, device="cuda")   # float32 tensors
+```
+
+At 4 contexts, the joint observer takes 2.6 s for 1000 episodes of 30 steps in numpy on
+one thread, and 94 ms in float64 or 55 ms in float32 on an RTX 3090 Ti. Float64 agrees with
+numpy to about `1e-12`, float32 to about `1e-4`.
 
 ---
 
@@ -421,12 +464,13 @@ A `ResourceWarning` fires automatically above 2 GiB.
 ```
 src/coggrid/
 ├── config.py       CogGridConfig — every tunable, validated, immutable
-├── generative.py   the generative model as pure functions
-├── world.py        World (config + embeddings), EpisodeBatch, and the five
-│                   swappable generative-stage signatures
+├── sampling.py     the random draws: contexts, realizations, observations
+├── likelihood.py   how realizations set P(obs = 1): embeddings, sinusoids, tables
+├── world.py        World (config + embeddings) and EpisodeBatch
 ├── observers.py    ideal-observer baselines, factorization regret,
 │                   dis-entanglement
 ├── env.py          CogGridEnv, the Gymnasium environment
+├── torch.py        optional CUDA acceleration of the joint observer
 └── viz/            plotting and animation
 examples/           five runnable scripts
 docs/make_assets.py regenerates the images in this README
@@ -443,7 +487,7 @@ Numerical notes worth knowing:
 - **Per-step belief updates** are recovered by differencing *log* beliefs.
   Beliefs routinely fall below `1e-12` once an observer is confident, and
   dividing two such numbers loses most of the significant digits.
-- **Rates** are clipped away from 0 and 1 before taking logs, and the sigmoid is
+- **Likelihoods** are clipped away from 0 and 1 before taking logs, and the sigmoid is
   overflow-safe.
 
 ---
@@ -452,7 +496,7 @@ Numerical notes worth knowing:
 
 | Repository | Contents |
 | --- | --- |
-| **this one** (`coggrid`) | The environment and ideal-observer baselines. No networks, no torch. |
+| **this one** (`coggrid`) | The environment and ideal-observer baselines. No networks; torch is optional. |
 | [`CognitiveGridworld`](https://github.com/johnschwarcz/CognitiveGridworld) | The reference implementation from the paper: environment *and* trained networks, together, as published. |
 
 Use **this** repo if you want the task. Use the paper repo to reproduce published

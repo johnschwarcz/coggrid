@@ -13,10 +13,10 @@ from coggrid import CogGridConfig, CogGridEnv
 cfg = CogGridConfig(n_vars=300, n_contexts=2, n_realizations=8, n_steps=30, seed=0)
 
 
-def run(policy, batch_size=200, expose_likelihood=False):
+def run(policy, n_episodes=200, expose_likelihood=False):
     env = CogGridEnv(cfg, expose_likelihood=expose_likelihood, seed=0)
     returns = []
-    for _ in range(batch_size):
+    for _ in range(n_episodes):
         obs, info = env.reset()
         state = policy.reset(obs, info)
         total = 0.0
@@ -27,7 +27,7 @@ def run(policy, batch_size=200, expose_likelihood=False):
             state = policy.observe(obs, state)
             total += reward
             done = terminated or truncated
-        returns.append(total / cfg.n_steps)
+        returns.append(total)  # the terminal reward: 1 if the final guess is right
     return float(np.mean(returns))
 
 
@@ -47,12 +47,12 @@ class BayesOptimal:
     """Exact posterior over the joint realization, updated online."""
 
     def reset(self, obs, info):
-        self.rates = info["rates"]            # (n_obs, R, ..., R)
-        self.goal = obs["goal_context"]
-        log_p, log_q = np.log(self.rates), np.log1p(-self.rates)
+        self.likelihood = info["joint_likelihood"]   # (n_obs, R, ..., R): P(obs = 1 | r)
+        self.goal = obs["goal_ind"]
+        log_p, log_q = np.log(self.likelihood), np.log1p(-self.likelihood)
         self.log_p, self.log_q = log_p, log_q
-        self.log_post = np.zeros(self.rates.shape[1:])
-        return None
+        self.log_post = np.zeros(self.likelihood.shape[1:])
+        return self.observe(obs, None)   # reset() already shows the first observation
 
     def observe(self, obs, state):
         bits = obs["observation"].astype(float)
@@ -69,7 +69,7 @@ class BayesOptimal:
         return int(marginal.argmax())
 
 
-print(f"random      mean per-step reward: {run(Random()):.3f}")
+print(f"random      final-step accuracy: {run(Random()):.3f}")
 bayes = run(BayesOptimal(), expose_likelihood=True)
-print(f"bayes-exact mean per-step reward: {bayes:.3f}")
-print(f"chance level:                     {1 / cfg.n_realizations:.3f}")
+print(f"bayes-exact final-step accuracy: {bayes:.3f}")
+print(f"chance level:                    {1 / cfg.n_realizations:.3f}")

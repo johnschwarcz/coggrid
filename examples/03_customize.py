@@ -1,4 +1,4 @@
-"""Swap out a generative stage without touching the library.
+"""Swap out the embeddings without touching the library.
 
 Replaces the default Gaussian embeddings with a small discrete codebook, so
 many latent variables share an embedding. The joint observer's advantage should

@@ -96,7 +96,7 @@ class TestAnimation:
 
         def probe(ax, view):
             assert view.n_steps == SMALL.n_steps
-            assert view.truth.shape == (SMALL.n_contexts,)
+            assert view.ctx_vals.shape == (SMALL.n_contexts,)
             return lambda t: seen.append(t)
 
         clip = animate_episode(
@@ -149,7 +149,7 @@ class TestAnimation:
         from coggrid.viz import EpisodeView
 
         view = EpisodeView(batch=batch, traces=traces)
-        goal, other = view.goal_context, 1 - view.goal_context
+        goal, other = view.goal_ind, 1 - view.goal_ind
         assert "goal" in view.variable_label(goal)
         assert "context" in view.variable_label(other)
         assert view.variable_color(goal) != view.variable_color(other)
@@ -197,11 +197,11 @@ class TestStaticFigures:
                 world, world.sample_episodes(2), channels=(0, SMALL.n_observations)
             )
 
-    def test_interaction_phases_angle_is_the_interaction_strength(self):
-        """The drawn angle must be ``arccos(z)`` for the strength the env used.
+    def test_interaction_phases_cosine_is_the_interaction_phase(self):
+        """The drawn angle must be ``arccos(z)`` for the phase the env used.
 
         Embeddings are unit vectors, so the cosine of the angle between a key and
-        a query *is* the interaction strength — the panel would be decorative
+        a query *is* the interaction phase — the panel would be decorative
         rather than informative if these came apart.
         """
         from coggrid.viz import plot_interaction_phases
@@ -230,10 +230,10 @@ class TestStaticFigures:
             plot_interaction_phases(world, world.sample_episodes(2))
 
     def test_interaction_phases_last_panel_is_the_real_table(self):
-        """The final panel must be read from ``batch.rates``, not rebuilt.
+        """The final panel must be read from ``batch.joint_likelihood``.
 
-        The earlier panels illustrate the built-in mechanism; this one has to
-        stay true even when a custom ``likelihood=`` made the others meaningless.
+        The earlier panels illustrate the mechanism; this one has to be the
+        exact table the observers use.
         """
         from coggrid.viz import plot_interaction_phases
 
@@ -244,7 +244,7 @@ class TestStaticFigures:
         # Compared as multisets: which variable lands on which axis depends on
         # where the goal fell, and that is not what this test is about.
         assert np.allclose(np.sort(drawn, axis=None),
-                           np.sort(batch.rates[0, 0], axis=None))
+                           np.sort(batch.joint_likelihood[0, 0], axis=None))
 
     def test_evidence_likelihood_draws_every_vector(self):
         """One panel per channel, plus one per possible observation vector."""
@@ -265,9 +265,9 @@ class TestStaticFigures:
         assert len(fig.axes) == cfg.n_observations + 8
 
     def test_evidence_likelihood_is_the_bernoulli_product(self):
-        """Each panel must be the normalized product of the channel rates.
+        """Each panel must be the normalized product of the channel likelihoods.
 
-        Derived here straight from ``batch.rates`` rather than from anything the
+        Derived here straight from ``batch.joint_likelihood`` rather than from anything the
         plotting code shares, so an error in the einsum cannot cancel out.
         """
         from coggrid.viz import plot_evidence_likelihood
@@ -276,12 +276,12 @@ class TestStaticFigures:
         batch = World(cfg).sample_episodes(4)
         fig = plot_evidence_likelihood(batch, episode=0)
 
-        rates = batch.rates[0]                       # (n_obs, R, R)
+        p = batch.joint_likelihood[0]                # (n_obs, R, R)
         for vector in range(2**cfg.n_observations):
             bits = [(vector >> c) & 1 for c in range(cfg.n_observations)]
-            expected = np.ones_like(rates[0])
+            expected = np.ones_like(p[0])
             for c, bit in enumerate(bits):
-                expected = expected * (rates[c] if bit else 1.0 - rates[c])
+                expected = expected * (p[c] if bit else 1.0 - p[c])
             expected = expected / expected.max()
             drawn = np.asarray(
                 fig.axes[cfg.n_observations + vector].get_images()[0].get_array()
@@ -348,7 +348,7 @@ class TestContextCounts:
 
     @staticmethod
     def _episode(n_contexts):
-        cfg = SMALL.replace(n_contexts=n_contexts)
+        cfg = SMALL.replace(n_contexts=n_contexts, n_held_out_vars=max(6, n_contexts))
         b = World(cfg).sample_episodes(8)
         return b, run_observers(b)
 
@@ -527,3 +527,23 @@ class TestContextCounts:
         clip = animate_episode(b, t, extended=True)
         clip.to_gif()
         assert clip.n_frames == SMALL.n_steps
+
+
+def test_figures_rebuild_the_tables_they_draw():
+    """A batch sampled without tables draws exactly the same figures."""
+    from coggrid.viz import (
+        plot_evidence_likelihood,
+        plot_interaction_phases,
+        plot_likelihood,
+    )
+
+    world = World(SMALL.replace(n_contexts=3))
+    full, lite = (world.sample_episodes(6, rng=2, expose_likelihood=t) for t in (True, False))
+    for draw in (
+        lambda b: plot_likelihood(b, episode=1),
+        lambda b: plot_evidence_likelihood(b, episode=1),
+        lambda b: plot_interaction_phases(world, b, episode=1, channels=(0,)),
+    ):
+        images = [[im.get_array() for ax in draw(b).axes for im in ax.get_images()]
+                  for b in (full, lite)]
+        assert all(np.array_equal(a, b) for a, b in zip(*images, strict=True))

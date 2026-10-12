@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "coggrid"
-version = "0.2.0"
+version = "0.3.0"
 description = "A stationary POMDP for studying compositional generalization in latent space"
 readme = "README.md"
 requires-python = ">=3.10"
@@ -28,6 +28,8 @@ classifiers = [
   "Programming Language :: Python :: 3.11",
   "Programming Language :: Python :: 3.12",
   "Programming Language :: Python :: 3.13",
+  "Programming Language :: Python :: 3.14",
+  "Programming Language :: Python :: 3.15",
   "Topic :: Scientific/Engineering :: Artificial Intelligence",
   "Operating System :: OS Independent",
 ]
@@ -35,12 +37,16 @@ classifiers = [
 dependencies = ["numpy>=1.24", "gymnasium>=0.29"]
 
 [project.optional-dependencies]
-# Plotting. Kept out of the core so that headless / CI installs stay small.
-viz = ["matplotlib>=3.7", "seaborn>=0.13"]
+# Plotting, kept out of the core so that headless / CI installs stay small.
+# Pillow writes the GIFs, and 9.1 is the first with Image.Dither.
+viz = ["matplotlib>=3.7", "pillow>=9.1"]
+# Optional CUDA acceleration of the joint observer (coggrid.torch).
+# 2.4.1 is the first torch whose wheels work with NumPy 2 on every OS.
+torch = ["torch>=2.4.1"]
 dev = [
   "coggrid[viz]",
   "pytest>=7.4",
-  "ruff>=0.5",
+  "ruff>=0.13",
   "mypy>=1.8",
 ]
 
@@ -68,6 +74,7 @@ target-version = "py310"
 
 [tool.ruff.lint]
 select = ["E", "F", "I", "UP", "B", "SIM", "NPY"]
+ignore = ["E501"]  # long lines are allowed: docstrings keep a sentence per line, messages a line each
 
 [tool.mypy]
 python_version = "3.10"

@@ -21,7 +21,7 @@ parser.add_argument("--seed", type=int, default=None)
 args, _ignored = parser.parse_known_args()
 args.out.mkdir(parents=True, exist_ok=True)
 
-cfg = CogGridConfig(n_vars=500, n_contexts=2, n_realizations=10, seed=None)
+cfg = CogGridConfig(n_vars=500, n_contexts=2, n_realizations=10, seed=args.seed)
 batch = World(cfg).sample_episodes(args.batch_size)
 traces = run_observers(batch)
 

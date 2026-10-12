@@ -44,9 +44,9 @@ class Palette:
         """Color for an observer, falling back to the matplotlib cycle."""
         return self.by_observer.get(name, "C3")
 
-    def context(self, context: int, goal_context: int) -> str:
+    def context(self, context: int, goal_ind: int) -> str:
         """Green if this context is the goal, orange otherwise."""
-        return self.goal if context == goal_context else self.other
+        return self.goal if context == goal_ind else self.other
 
 
 #: The default palette. Replace attributes on your own instance and pass it in.

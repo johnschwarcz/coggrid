@@ -30,7 +30,7 @@ from matplotlib.colors import LinearSegmentedColormap
 from matplotlib.figure import Figure
 from matplotlib.patches import Rectangle
 
-from .. import generative as gen
+from .. import likelihood
 from ..observers import BeliefTrace, factorization_regret
 from ..world import EpisodeBatch
 from .style import PALETTE, Palette, label_axes, transparent_cmap
@@ -61,10 +61,10 @@ __all__ = [
 # --------------------------------------------------------------------------- #
 # helpers
 # --------------------------------------------------------------------------- #
-def _pair_slice(rates: np.ndarray, i: int, j: int, n_contexts: int) -> np.ndarray:
-    """Marginalise a joint rate table down to the ``(i, j)`` realization plane."""
+def _pair_slice(table: np.ndarray, i: int, j: int, n_contexts: int) -> np.ndarray:
+    """Marginalise a joint likelihood table down to the ``(i, j)`` realization plane."""
     other = tuple(i_ for i_ in range(n_contexts) if i_ not in (i, j))
-    out = rates.mean(axis=tuple(a for a in other)) if other else rates
+    out = table.mean(axis=tuple(a for a in other)) if other else table
     # After averaging, axis order among the kept contexts is preserved.
     return out if i < j else out.T
 
@@ -78,7 +78,7 @@ MAX_PAIRS = 3
 
 
 def display_pairs(
-    n_contexts: int, goal_context: int = 0, max_pairs: int = MAX_PAIRS
+    n_contexts: int, goal_ind: int = 0, max_pairs: int = MAX_PAIRS
 ) -> list[tuple[int, int]]:
     """Which variable pairs are worth drawing, in priority order.
 
@@ -91,19 +91,19 @@ def display_pairs(
     if n_contexts < 2:
         return []
     goal_first = [
-        (min(goal_context, c), max(goal_context, c))
+        (min(goal_ind, c), max(goal_ind, c))
         for c in range(n_contexts)
-        if c != goal_context
+        if c != goal_ind
     ]
-    rest = [p for p in _context_pairs(n_contexts) if goal_context not in p]
+    rest = [p for p in _context_pairs(n_contexts) if goal_ind not in p]
     return (goal_first + rest)[:max_pairs]
 
 
 def _n_joint_panels(
-    n_contexts: int, goal_context: int = 0, max_pairs: int = MAX_PAIRS
+    n_contexts: int, goal_ind: int = 0, max_pairs: int = MAX_PAIRS
 ) -> int:
     """Joint panels needed: one per shown pair, or one strip when there is none."""
-    return max(1, len(display_pairs(n_contexts, goal_context, max_pairs)))
+    return max(1, len(display_pairs(n_contexts, goal_ind, max_pairs)))
 
 
 def _wants_marginal(n_contexts: int, show_marginal: bool) -> bool:
@@ -115,10 +115,10 @@ def _wants_marginal(n_contexts: int, show_marginal: bool) -> bool:
     return show_marginal and n_contexts > 1
 
 
-#: Rates are probabilities, so every heatmap is pinned to this range. Fixing it
+#: Likelihoods are probabilities, so every heatmap is pinned to this range. Fixing it
 #: is what lets the figures drop colorbars: the scale never varies between
 #: panels, episodes or runs, so it is stated once in the title instead.
-RATE_SCALE = dict(vmin=0.0, vmax=1.0, cmap="magma", origin="lower")
+LIKELIHOOD_SCALE = dict(vmin=0.0, vmax=1.0, cmap="magma", origin="lower")
 
 
 def _observer_pair(
@@ -170,7 +170,7 @@ def _joint_cell(
 def _draw_marginal(
     ax: plt.Axes, profile: np.ndarray, color: str, truth: int, vertical: bool
 ) -> None:
-    """One variable's factorized rate, drawn against the edge of its joint panel."""
+    """One variable's factorized likelihood, drawn against the edge of its joint panel."""
     grid = np.arange(profile.size)
     if vertical:
         ax.fill_betweenx(grid, profile, color=color, alpha=0.35, lw=0)
@@ -205,8 +205,8 @@ def plot_likelihood(
     """Show ``P(observation = 1)`` as a function of the active variables' values.
 
     One panel per pair of active variables, with each variable's *factorized*
-    rate drawn as a profile against the top and right edges — the same numbers a
-    naive observer sees in ``batch.marginal_rates``. The outline marks the
+    likelihood drawn as a profile against the top and right edges — the same numbers a
+    naive observer sees in ``batch.marginal_likelihood``. The outline marks the
     realization that actually occurred; green means that variable is the goal,
     and the dashed line on each profile marks the same truth.
 
@@ -215,7 +215,7 @@ def plot_likelihood(
     checkered or otherwise non-separable, it does — and the edge profiles are
     exactly what it collapses to.
 
-    There is no colorbar. Rates are probabilities and every panel is pinned to
+    There is no colorbar. Likelihoods are probabilities and every panel is pinned to
     ``[0, 1]`` on ``magma`` (dark = 0, light = 1), so the scale is stated in the
     title rather than redrawn beside each panel.
 
@@ -235,11 +235,12 @@ def plot_likelihood(
         grid (joint plus two marginals); see :func:`plot_episode`.
     """
     cfg = batch.cfg
-    rates = batch.rates[episode, channel]
-    marginal = batch.marginal_rates[episode, channel]  # (n_contexts, n_realizations)
+    episode_joint, episode_marginal = batch._tables_of(episode)
+    joint = episode_joint[0, channel]
+    marginal = episode_marginal[0, channel]  # (n_contexts, n_realizations)
     ctx_vals = batch.ctx_vals[episode]
-    goal_ctx = int(batch.goal_ind[episode])
-    pairs = display_pairs(cfg.n_contexts, goal_ctx, max_pairs)
+    goal_ind = int(batch.goal_ind[episode])
+    pairs = display_pairs(cfg.n_contexts, goal_ind, max_pairs)
     n_joint = max(1, len(pairs))
     show_marginal = _wants_marginal(cfg.n_contexts, show_marginal)
 
@@ -255,24 +256,24 @@ def plot_likelihood(
 
     if not pairs:  # n_contexts == 1: a single strip over realizations
         ax = fig.add_subplot(cells[0, 0])
-        ax.imshow(rates[None, :], aspect="auto", **RATE_SCALE)
+        ax.imshow(joint[None, :], aspect="auto", **LIKELIHOOD_SCALE)
         ax.add_patch(
             Rectangle(
                 (ctx_vals[0] - 0.5, -0.5), 1, 1,
-                edgecolor=palette.context(0, goal_ctx), facecolor="none", linewidth=2.5,
+                edgecolor=palette.context(0, goal_ind), facecolor="none", linewidth=2.5,
             )
         )
         ax.set_yticks([])
-        label_axes(ax, xlabel="realization of var 0", title="joint rate")
+        label_axes(ax, xlabel="realization of var 0", title="joint likelihood")
     else:
         for cell, (i, j) in zip(cells, pairs, strict=False):
             ax_j, ax_top, ax_right = _joint_cell(fig, cell, show_marginal)
-            plane = _pair_slice(rates, i, j, cfg.n_contexts)
-            ax_j.imshow(plane.T, aspect="auto", **RATE_SCALE)
+            plane = _pair_slice(joint, i, j, cfg.n_contexts)
+            ax_j.imshow(plane.T, aspect="auto", **LIKELIHOOD_SCALE)
             ax_j.add_patch(
                 Rectangle(
                     (ctx_vals[i] - 0.5, ctx_vals[j] - 0.5), 1, 1,
-                    edgecolor=palette.goal if goal_ctx in (i, j) else palette.other,
+                    edgecolor=palette.goal if goal_ind in (i, j) else palette.other,
                     facecolor="none", linewidth=2.5,
                 )
             )
@@ -287,18 +288,18 @@ def plot_likelihood(
 
             if show_marginal:
                 _draw_marginal(
-                    ax_top, marginal[i], palette.context(i, goal_ctx),
+                    ax_top, marginal[i], palette.context(i, goal_ind),
                     int(ctx_vals[i]), vertical=False,
                 )
                 _draw_marginal(
-                    ax_right, marginal[j], palette.context(j, goal_ctx),
+                    ax_right, marginal[j], palette.context(j, goal_ind),
                     int(ctx_vals[j]), vertical=True,
                 )
 
     if owns_figure:
         fig.suptitle(
             f"observation channel {channel}, episode {episode} "
-            f"({batch.split} split) — rate 0 (dark) to 1 (light), "
+            f"({batch.split} split) — likelihood 0 (dark) to 1 (light), "
             "edge profiles = factorized view, green = goal variable",
             fontsize=10,
         )
@@ -333,7 +334,7 @@ def plot_trial(
 
     cfg = batch.cfg
     n_steps = batch.n_steps
-    goal_ctx = int(batch.goal_ind[episode])
+    goal_ind = int(batch.goal_ind[episode])
 
     owns_figure = axes is None
     if axes is None:
@@ -362,11 +363,11 @@ def plot_trial(
         extent=(-0.5, n_steps - 0.5, -0.5, cfg.n_observations - 0.5),
     )
     ax.set_yticks(range(cfg.n_observations))
-    rate_text = ", ".join(f"{p:.2f}" for p in batch.true_rates[episode])
+    p_text = ", ".join(f"{p:.2f}" for p in batch.p_obs__vals[episode])
     label_axes(ax, ylabel="channel")
     # Two lines at a smaller size: this panel is one column wide when composed
-    # into plot_episode, and a single-line rate list overflows it.
-    ax.set_title(f"observations\n(true rates: {rate_text})", fontsize=9)
+    # into plot_episode, and a single-line list of probabilities overflows it.
+    ax.set_title(f"observations\n(P(o = 1): {p_text})", fontsize=9)
 
     # --- beliefs ------------------------------------------------------------
     steps = np.arange(n_steps)
@@ -387,9 +388,9 @@ def plot_trial(
             )
 
         truth = int(batch.ctx_vals[episode, c])
-        ax.axhline(truth, ls="--", lw=2.0, color=palette.context(c, goal_ctx), zorder=5)
+        ax.axhline(truth, ls="--", lw=2.0, color=palette.context(c, goal_ind), zorder=5)
         ax.set_ylim(-0.5, cfg.n_realizations - 0.5)
-        is_goal = c == goal_ctx
+        is_goal = c == goal_ind
         label_axes(
             ax,
             ylabel="realization",
@@ -438,10 +439,10 @@ def plot_episode(
     """:func:`plot_likelihood` and :func:`plot_trial` side by side, one episode.
 
     The likelihood panels on the left say what *could* have been inferred from
-    this episode's rate surface; the trial column on the right says what the two
+    this episode's likelihood surface; the trial column on the right says what the two
     observers actually did infer from the samples they saw. Reading them
     together is the point — a large joint/naive gap in the belief panels should
-    correspond to visible non-separability in the rate panel.
+    correspond to visible non-separability in the likelihood panels.
 
     The trial column is one panel wide, so it stays legible next to the
     likelihood panels instead of dominating the figure.
@@ -476,7 +477,7 @@ def plot_episode(
 
     fig.suptitle(
         f"episode {episode} ({batch.split} split), observation channel {channel}"
-        "  —  rate 0 (dark) to 1 (light), green = goal variable",
+        "  —  likelihood 0 (dark) to 1 (light), green = goal variable",
         fontsize=11,
     )
     return fig
@@ -491,7 +492,7 @@ METRIC_LABELS = {
     "accuracy": "accuracy",
     "p_correct": "P(true value)",
     "mse": "squared error",
-    "regret": "symmetric KL (nats)",
+    "regret": "KL(joint ‖ naive) (nats)",
 }
 METRIC_TITLES = {"regret": "factorization regret"}
 
@@ -732,7 +733,7 @@ def plot_relative_accuracy(
 def _pair_rank(i: int, j: int, n_contexts: int) -> int:
     """Index of the ordered pair ``(i, j)`` within ``EpisodeBatch.interactions``.
 
-    ``joint_likelihood`` stores two strengths per unordered pair, in the order
+    It holds two phases per unordered pair, in the order
     ``(0,1), (1,0), (0,2), (2,0), ...`` — so the forward direction sits at twice
     the pair's lexicographic rank and the reverse one just after it.
     """
@@ -741,26 +742,26 @@ def _pair_rank(i: int, j: int, n_contexts: int) -> int:
     return 2 * rank + (0 if i < j else 1)
 
 
-#: Interaction strengths get their own colour throughout the phase figure, so
+#: Interaction phases get their own colour throughout the phase figure, so
 #: that variable colours can mean "which variable owns this vector" and nothing
 #: else.
 PHASE_COLOR = "#7b52ab"
 
 
-def _standard_waveform(cfg, n_samples: int = 2001) -> np.ndarray:
-    """The one potential waveform every variable is a phase-shifted copy of.
+def _standard_sinusoid(cfg, n_samples: int = 2001) -> np.ndarray:
+    """The one sinusoid every outer vector reads, phase-shifted.
 
-    Recovered by reading realization 0 as the interaction strength sweeps a full
-    turn, which is the same thing as evaluating the waveform at every phase.
+    Recovered by reading realization 0 as the interaction phase sweeps a full
+    turn, which is the same thing as evaluating the sinusoid at every phase.
     """
     turn = np.linspace(0.0, 1.0, n_samples)[:-1]
-    return gen.realization_potential(turn, gen.value_profile(cfg), cfg.n_roll)[:, 0]
+    return likelihood.soft_roll(turn, likelihood.get_sinusoids(cfg))[:, 0]
 
 
-def _wave_at(cfg, waveform: np.ndarray, position: np.ndarray) -> np.ndarray:
-    """Evaluate the standard waveform at a continuous circular ``position``."""
-    turn = np.linspace(0.0, 1.0, waveform.size + 1)[:-1]
-    return np.interp(np.mod(position, cfg.n_roll) / cfg.n_roll, turn, waveform,
+def _sinusoid_at(cfg, sinusoid: np.ndarray, position: np.ndarray) -> np.ndarray:
+    """Evaluate the standard sinusoid at a continuous circular ``position``."""
+    turn = np.linspace(0.0, 1.0, sinusoid.size + 1)[:-1]
+    return np.interp(np.mod(position, cfg.n_roll) / cfg.n_roll, turn, sinusoid,
                      period=1.0)
 
 
@@ -792,44 +793,44 @@ def _draw_angle(ax, cosine: float, baseline: float, colours: tuple[str, str],
 def _draw_phase_columns(
     axes: Sequence[plt.Axes],
     cfg,
-    waveform: np.ndarray,
+    sinusoid: np.ndarray,
     pattern: np.ndarray,
     pair: tuple[int, int],
     colours: tuple[str, str],
-    strengths: tuple[float, float],
+    phases: tuple[float, float],
     table: np.ndarray,
     *,
     palette: Palette = PALETTE,
     legend: bool = True,
     window_anchor: tuple[float, float] = (0.0, 0.0),
 ) -> None:
-    """Draw the three columns that follow from the interaction strengths.
+    """Draw the three columns that follow from the interaction phases.
 
-    Everything downstream of the embeddings — the phases, the window, the rate
+    Everything downstream of the embeddings — the phases, the window, the likelihood
     table — is a pure function of ``(z_ij, z_ji)``. Sharing it is what keeps the
     static figure and the animation from drifting apart; only the first column,
     which draws the vectors themselves, differs between them.
     """
     i, j = pair
     colour_i, colour_j = colours
-    z_ij, z_ji = strengths
+    z_ij, z_ji = phases
     n_roll, n_r = cfg.n_roll, cfg.n_realizations
     realizations = np.arange(n_r)
 
-    # ── one waveform, two starting phases
+    # ── one sinusoid, two starting phases
     ax = axes[0]
     # Two turns, like the pattern panel: a variable's ten realizations span
     # ``n_realizations - 1`` slots, and over one turn that run splits in half
     # whenever it straddles the wrap.
     turn = np.arange(2 * n_roll * 8) / 8.0
-    ax.plot(turn, _wave_at(cfg, waveform, turn), color="0.4", lw=1.4,
-            label="waveform")
+    ax.plot(turn, _sinusoid_at(cfg, sinusoid, turn), color="0.4", lw=1.4,
+            label="sinusoid")
     ax.axvline(n_roll, color=palette.grid, lw=0.9, ls="--", alpha=0.8)
     # The two variables read the same curve, so wherever their phases nearly
     # agree their markers would sit on top of each other and one would vanish.
     # Nudging them apart is a legibility offset only: both sets lie on the
     # curve, and the small gap is drawn, not measured.
-    dodge = 0.03 * float(np.ptp(waveform))
+    dodge = 0.03 * float(np.ptp(sinusoid))
     anchor_i, anchor_j = window_anchor
     span = n_r - 1
     for c, z, colour, marker, lift, anchor in (
@@ -841,18 +842,18 @@ def _draw_phase_columns(
         # markers stay one contiguous run — on the second copy of the curve when
         # they would otherwise straddle the wrap — and the two panels agree.
         low = anchor + np.mod(z * n_roll - span - anchor, n_roll)
-        ax.plot(low + span - realizations, _wave_at(cfg, waveform, pos) + lift,
+        ax.plot(low + span - realizations, _sinusoid_at(cfg, sinusoid, pos) + lift,
                 marker, ms=6, color=colour,
                 label=f"var {c}")
     # Leave room around the curve: autoscaling fits the data exactly, which puts
     # a peak marker — already nudged by ``dodge`` — right on the frame.
-    low = float(waveform.min()) - dodge
-    high = float(waveform.max()) + dodge
+    low = float(sinusoid.min()) - dodge
+    high = float(sinusoid.max()) + dodge
     ax.set_ylim(low - 0.14 * (high - low), high + 0.14 * (high - low))
     ax.set_xlim(-0.6, 2 * n_roll + 0.6)
-    ax.set_title("one waveform, two phases", fontsize=10)
+    ax.set_title("one sinusoid, two phases", fontsize=10)
     ax.set_xlabel("phase (slots)", fontsize=9)
-    ax.set_ylabel("potential", fontsize=9)
+    ax.set_ylabel("sinusoid", fontsize=9)
     ax.grid(alpha=0.25, color=palette.grid)
     if legend:
         ax.legend(fontsize=8, frameon=False, loc="lower right")
@@ -881,19 +882,19 @@ def _draw_phase_columns(
     ax.set_xlabel(f"phase of var {i}", fontsize=9)
     ax.set_ylabel(f"phase of var {j}", fontsize=9)
 
-    # ── the rate table an observer sees
+    # ── the likelihood table an observer sees
     ax = axes[2]
     ax.imshow(table.T, origin="lower", cmap="magma", vmin=0.0, vmax=1.0)
-    ax.set_title("the rate table", fontsize=10)
+    ax.set_title("the likelihood table", fontsize=10)
     ax.set_xlabel(f"var {i} realization", fontsize=9)
     ax.set_ylabel(f"var {j} realization", fontsize=9)
 
 
-def _phase_pattern(cfg, waveform: np.ndarray) -> np.ndarray:
+def _phase_pattern(cfg, sinusoid: np.ndarray) -> np.ndarray:
     """The standard pattern, tiled over two turns so a wrapped window stays one box."""
     fine = np.arange(cfg.n_roll * 4) / 4.0
-    tile = gen.sigmoid(np.outer(_wave_at(cfg, waveform, fine),
-                                _wave_at(cfg, waveform, fine)))
+    tile = likelihood.sigmoid(np.outer(_sinusoid_at(cfg, sinusoid, fine),
+                                       _sinusoid_at(cfg, sinusoid, fine)))
     return np.tile(tile, (2, 2))
 
 
@@ -910,7 +911,7 @@ def plot_interaction_phases(
 ) -> Figure:
     """Interactions as **phase shifts of one standard likelihood**.
 
-    Every rate table in the environment is the *same* pattern. A pair of latent
+    Every likelihood table in the environment is the *same* pattern. A pair of latent
     variables only chooses which part of it you see: the angle between one
     variable's key and the other's query sets a phase, and the phase translates
     the pattern. The shape never changes.
@@ -918,33 +919,29 @@ def plot_interaction_phases(
     One row per observation channel, reading left to right:
 
     1. **Embeddings.** The key and query whose angle matters. Both are unit
-       vectors, so the cosine of that angle *is* the interaction strength ``z``.
+       vectors, so the cosine of that angle *is* the interaction phase ``z``.
        Arrow colour says which variable owns the vector. The arc is purple
        because an angle belongs to neither, but its ``z`` label takes the colour
        of the variable whose phase it sets — the same colour that variable's
        markers, box edges and table axis carry in the panels to the right, so a
-       strength can be followed all the way through. Both directions appear, and
+       phase can be followed all the way through. Both directions appear, and
        they differ — that asymmetry is what stops the joint from being symmetric.
-    2. **Phase.** One waveform, read from two starting points. Both variables
-       sample the same curve; their strengths only say where to start.
+    2. **Phase.** One sinusoid, read from two starting points. Both variables
+       sample the same curve; their phases only say where to start.
     3. **The standard pattern**, with the window this channel selects. Each pair
        of box edges takes the colour of the variable whose phase range it spans.
        The pattern is periodic, so it is drawn over two turns and the window
        stays a single box — one that runs off an edge continues on the next copy.
-    4. **The rate table** that window yields.
+    4. **The likelihood table** that window yields.
 
     Colour means exactly one thing here: **which variable** an element acts on.
     Nothing marks which realization actually occurred — this figure is about how
     the world is built, not about how one episode turned out.
 
-    Comparing the rows is the point: same waveform, same pattern, different
+    Comparing the rows is the point: same sinusoid, same pattern, different
     angles, different window, different table. Two channels are drawn rather than
     all of them because the embeddings are orthogonalized across channels, so two
     is enough to show the phases move independently.
-
-    This describes the **built-in** likelihood. Passing your own ``likelihood=``
-    to :class:`~coggrid.World` replaces the mechanism, and only the last column
-    stays meaningful.
 
     Parameters
     ----------
@@ -979,7 +976,8 @@ def plot_interaction_phases(
     var_i, var_j = (int(batch.ctx_inds[episode, c]) for c in (i, j))
     colour_i, colour_j = palette.context(i, goal), palette.context(j, goal)
 
-    waveform = _standard_waveform(cfg)
+    sinusoid = _standard_sinusoid(cfg)
+    joint = batch._tables_of(episode)[0][0]
 
     if figsize is None:
         figsize = (15.0, 3.9 * len(channels))
@@ -989,10 +987,10 @@ def plot_interaction_phases(
 
     # The standard pattern is identical in every row — that is the whole claim.
     # Drawn over two turns so a window that crosses the wrap stays one box.
-    pattern = _phase_pattern(cfg, waveform)
+    pattern = _phase_pattern(cfg, sinusoid)
 
     for row, channel in enumerate(channels):
-        # Read from the batch, so the panel cannot drift from the strengths the
+        # Read from the batch, so the panel cannot drift from the phases the
         # environment actually used.
         z_ij = float(batch.interactions[episode, channel,
                                         _pair_rank(i, j, cfg.n_contexts)])
@@ -1016,15 +1014,15 @@ def plot_interaction_phases(
         ax.set_title(f"channel {channel}: embeddings", fontsize=10)
         ax.set_xlabel(r"$z = \cos\theta$  (unit vectors)", fontsize=8, color="0.4")
 
-        # ── 2-4: everything the two strengths determine
-        table = _pair_slice(batch.rates[episode, channel], i, j, cfg.n_contexts)
-        _draw_phase_columns(axes[row][1:], cfg, waveform, pattern, (i, j),
+        # ── 2-4: everything the two phases determine
+        table = _pair_slice(joint[channel], i, j, cfg.n_contexts)
+        _draw_phase_columns(axes[row][1:], cfg, sinusoid, pattern, (i, j),
                             (colour_i, colour_j), (z_ij, z_ji), table,
                             palette=palette)
 
     fig.suptitle(
-        f"one standard likelihood, translated by the interaction angles  —  "
-        f"vars {var_i} and {var_j}, rates dark 0 to light 1",
+        f"one standard likelihood, translated by the interaction phases  —  "
+        f"vars {var_i} and {var_j}, likelihood dark 0 to light 1",
         fontsize=12,
     )
     return fig
@@ -1042,14 +1040,14 @@ def plot_evidence_likelihood(
 ) -> Figure:
     """What a *single* observation vector says about the joint realization.
 
-    The top row is the per-channel rate tables — the building blocks. Because
+    The top row is the per-channel likelihood tables — the building blocks. Because
     key and query embeddings are orthonormalized across channels, each one
     carves the realization plane differently, and none of them is a shifted copy
     of another.
 
     The grid below is the payoff: one panel per possible observation *vector*,
     showing the posterior a single sample induces from a uniform prior. It is the
-    product of the channel tables, taking each channel's rate where that bit is
+    product of the channel tables, taking each channel's likelihood where that bit is
     1 and its complement where the bit is 0 — so ``n_observations`` binary
     channels generate ``2 ** n_observations`` distinct ways of slicing the plane,
     most of them far sharper than any channel alone.
@@ -1068,16 +1066,17 @@ def plot_evidence_likelihood(
     batch:
         Any :class:`~coggrid.world.EpisodeBatch`.
     episode:
-        Which episode's rate tables to use.
+        Which episode's likelihood tables to use.
     pair:
         Which two active variables. Defaults to the first pair involving the goal.
     max_vectors:
         Cap on the number of observation vectors drawn. With more than this many
         possible, an evenly spaced subset is shown.
     """
-    from ..observers import RATE_FLOOR
+    from ..observers import LIKELIHOOD_FLOOR
 
     cfg = batch.cfg
+    joint = batch._tables_of(episode)[0][0]
     goal = int(batch.goal_ind[episode])
     if pair is None:
         pairs = display_pairs(cfg.n_contexts, goal, max_pairs=1)
@@ -1085,10 +1084,10 @@ def plot_evidence_likelihood(
     i, j = pair
 
     tables = np.stack([
-        np.atleast_2d(_pair_slice(batch.rates[episode, c], i, j, cfg.n_contexts))
+        np.atleast_2d(_pair_slice(joint[c], i, j, cfg.n_contexts))
         for c in range(cfg.n_observations)
     ])
-    tables = np.clip(tables, RATE_FLOOR, 1.0 - RATE_FLOOR)
+    tables = np.clip(tables, LIKELIHOOD_FLOOR, 1.0 - LIKELIHOOD_FLOOR)
 
     n_possible = 2**cfg.n_observations
     chosen = (
@@ -1118,7 +1117,7 @@ def plot_evidence_likelihood(
         ax.set_title(f"channel {c}", fontsize=9)
         ax.set_xticks([]), ax.set_yticks([])
     top.suptitle(
-        f"per-channel rates  P(o = 1 | var {i}, var {j})  —  dark 0 to light 1",
+        f"per-channel likelihoods  P(o = 1 | var {i}, var {j})  —  dark 0 to light 1",
         fontsize=10,
     )
 
@@ -1234,7 +1233,7 @@ def plot_map_agreement(
 
     n_r = batch.cfg.n_realizations
     half = n_r // 2
-    truth = batch.goal_value
+    truth = batch.goal_val
 
     def signed_error(trace: BeliefTrace) -> np.ndarray:
         guess = trace.goal_belief[:, -1].argmax(-1)
@@ -1282,7 +1281,7 @@ def plot_belief_profile(
     n_r = batch.cfg.n_realizations
     offsets = np.arange(n_r) - n_r // 2
     for trace in items:
-        centered = _center_on_truth(trace.goal_belief[:, -1], batch.goal_value, n_r)
+        centered = _center_on_truth(trace.goal_belief[:, -1], batch.goal_val, n_r)
         color = palette.for_observer(trace.name)
         ax.plot(offsets, centered.mean(0), color=color, lw=2.4,
                 marker="o", ms=4, label=trace.name)
@@ -1577,7 +1576,7 @@ def summary_figure(
 
     Four figures, narrowing from *what happened* to *what it cost*:
 
-    1. :func:`plot_episode` — one episode's rate surface beside its belief traces.
+    1. :func:`plot_episode` — one episode's likelihood surface beside its belief traces.
     2. :func:`plot_performance` — batch-averaged learning curves, ending in regret.
     3. :func:`plot_regret_analysis` — whether regret explains the joint/naive gap.
     4. :func:`plot_belief_shape` — the posteriors behind those accuracy numbers.

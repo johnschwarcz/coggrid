@@ -1,8 +1,8 @@
 """coggrid — a stationary POMDP for studying compositional generalization
 in latent space.
 
-The "grid" is the table of observation rates over the joint realizations of the
-active latent variables.
+The "grid" is the table of observation likelihoods over the joint realizations
+of the active latent variables.
 
 Quick start
 -----------
@@ -23,12 +23,13 @@ Gymnasium interface
 Layout
 ------
 ``config``       :class:`CogGridConfig` — every tunable, validated, immutable.
-``generative``   The generative model as pure functions.
-``world``        :class:`World`, :class:`EpisodeBatch`, and the five swappable
-                 generative-stage signatures.
+``sampling``     The random draws: contexts, realizations, observations.
+``likelihood``   How realizations set ``P(obs = 1)``: embeddings, sinusoids, the likelihood tables.
+``world``        :class:`World` and :class:`EpisodeBatch`.
 ``observers``    Ideal-observer baselines and metrics.
 ``env``          :class:`CogGridEnv`, the Gymnasium environment.
-``viz``          Plotting. Every function returns a figure; none call ``show()``.
+``torch``        Optional CUDA acceleration of the joint observer.
+``viz``          Plotting and animation; nothing calls ``show()``.
 """
 
 from __future__ import annotations
@@ -44,17 +45,9 @@ from .observers import (
     run_observers,
     score_belief,
 )
-from .world import (
-    ContextSampler,
-    EmbeddingSource,
-    EpisodeBatch,
-    LikelihoodModel,
-    ObservationModel,
-    RealizationSampler,
-    World,
-)
+from .world import EmbeddingSource, EpisodeBatch, World
 
-__version__ = "0.2.0"
+__version__ = "0.3.0"
 
 __all__ = [
     "__version__",
@@ -72,10 +65,6 @@ __all__ = [
     "score_belief",
     "factorization_regret",
     "disentanglement",
-    # extension points
+    # extension point
     "EmbeddingSource",
-    "ContextSampler",
-    "LikelihoodModel",
-    "RealizationSampler",
-    "ObservationModel",
 ]

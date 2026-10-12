@@ -1,11 +1,11 @@
-"""Plotting for CogGrid.
+"""Plotting and animation for CogGrid.
 
 Optional: install with ``pip install 'coggrid[viz]'``. The
 environment itself never imports matplotlib.
 
-Every function takes data (an :class:`~coggrid.world.EpisodeBatch`
-or a :class:`~coggrid.observers.BeliefTrace`), returns a
-``Figure``, and never calls ``show()``.
+The ``plot_*`` functions return a ``Figure`` and the ``animate_*``
+functions an :class:`~coggrid.viz.animate.EpisodeAnimation`; nothing
+calls ``show()``.
 
 >>> from coggrid import CogGridConfig, World, run_observers
 >>> from coggrid.viz import plot_performance

@@ -45,7 +45,7 @@ from matplotlib.colors import LinearSegmentedColormap, to_hex
 from matplotlib.figure import Figure
 from matplotlib.patches import Rectangle
 
-from .. import generative as gen
+from .. import likelihood
 from ..observers import BeliefTrace, disentanglement, factorization_regret
 from ..world import EpisodeBatch
 from .plots import (
@@ -53,8 +53,8 @@ from .plots import (
     PHASE_COLOR,
     _draw_phase_columns,
     _phase_pattern,
-    _standard_waveform,
-    _wave_at,
+    _sinusoid_at,
+    _standard_sinusoid,
     display_pairs,
 )
 from .style import PALETTE, Palette, label_axes
@@ -105,7 +105,7 @@ class EpisodeView:
     @property
     def pairs(self) -> list[tuple[int, int]]:
         """Variable pairs worth drawing, goal-involving first. Empty when C == 1."""
-        return display_pairs(self.cfg.n_contexts, self.goal_context, self.max_pairs)
+        return display_pairs(self.cfg.n_contexts, self.goal_ind, self.max_pairs)
 
     @property
     def primary_pair(self) -> tuple[int, int] | None:
@@ -121,18 +121,18 @@ class EpisodeView:
         return self.batch.n_steps
 
     @property
-    def truth(self) -> np.ndarray:
+    def ctx_vals(self) -> np.ndarray:
         """``(n_contexts,)`` realization each active variable actually took."""
         return self.batch.ctx_vals[self.episode]
 
     @property
-    def goal_context(self) -> int:
+    def goal_ind(self) -> int:
         """Which column of the active variables the agent is scored on."""
         return int(self.batch.goal_ind[self.episode])
 
     def variable_label(self, c: int) -> str:
         """Axis label naming the variable and its role this episode."""
-        role = "goal" if c == self.goal_context else "context"
+        role = "goal" if c == self.goal_ind else "context"
         return f"var {c} (idx {self.batch.ctx_inds[self.episode, c]}) — {role}"
 
     def variable_color(self, c: int) -> str:
@@ -142,9 +142,9 @@ class EpisodeView:
         indistinguishable lines, so the context variables are spread across an
         orange ramp — still obviously "not the goal", but telling apart.
         """
-        if c == self.goal_context:
+        if c == self.goal_ind:
             return self.palette.goal
-        others = [k for k in range(self.cfg.n_contexts) if k != self.goal_context]
+        others = [k for k in range(self.cfg.n_contexts) if k != self.goal_ind]
         if len(others) < 2:
             return self.palette.other
         ramp = LinearSegmentedColormap.from_list(
@@ -160,7 +160,10 @@ class EpisodeView:
     @cached_property
     def _joint_posterior(self) -> np.ndarray:
         """``(n_steps, R, ..., R)`` normalized posterior over the whole grid."""
-        log_post = self.traces["joint"].log_posterior[self.episode]
+        log_posterior = self.traces["joint"].log_posterior
+        if log_posterior is None:
+            raise ValueError("the joint grid needs keep_log_posterior=True")
+        log_post = log_posterior[self.episode]
         axes = tuple(range(1, log_post.ndim))
         grid = np.exp(log_post - log_post.max(axis=axes, keepdims=True))
         return grid / grid.sum(axis=axes, keepdims=True)
@@ -262,20 +265,22 @@ class EpisodeView:
 # built-in panels
 # --------------------------------------------------------------------------- #
 def _mark_truth(ax: Axes, view: EpisodeView) -> None:
+    i, j = view._pair()  # the pair the grid shows, not always variables 0 and 1
     ax.add_patch(
         Rectangle(
-            (view.truth[0] - 0.5, view.truth[1] - 0.5), 1, 1,
+            (view.ctx_vals[i] - 0.5, view.ctx_vals[j] - 0.5), 1, 1,
             edgecolor=view.palette.goal, facecolor="none", linewidth=2.0,
         )
     )
 
 
 def _label_grid(ax: Axes, view: EpisodeView, title: str) -> None:
+    i, j = view._pair()
     label_axes(
-        ax, xlabel=view.variable_label(0), ylabel=view.variable_label(1), title=title
+        ax, xlabel=view.variable_label(i), ylabel=view.variable_label(j), title=title
     )
-    ax.xaxis.label.set_color(view.variable_color(0))
-    ax.yaxis.label.set_color(view.variable_color(1))
+    ax.xaxis.label.set_color(view.variable_color(i))
+    ax.yaxis.label.set_color(view.variable_color(j))
 
 
 def _posterior_panel(which: str, title: str) -> Panel:
@@ -372,7 +377,7 @@ def marginal_beliefs_panel(ax: Axes, view: EpisodeView) -> Callable[[int], Any]:
     """
     n_r = view.cfg.n_realizations
     grid = np.arange(n_r)
-    goal = view.goal_context
+    goal = view.goal_ind
     lines = {}
     fills = {}  # Dictionary to track the fill collections
     
@@ -392,7 +397,7 @@ def marginal_beliefs_panel(ax: Axes, view: EpisodeView) -> Callable[[int], Any]:
         lines[name] = line
         fills[name] = fill
 
-    ax.axvline(view.truth[goal], color=view.palette.goal, ls=":", lw=1.4)
+    ax.axvline(view.ctx_vals[goal], color=view.palette.goal, ls=":", lw=1.4)
 
     ax.set_xlim(-0.5, n_r - 0.5)
     ax.set_ylim(0.0, 1.02)
@@ -435,7 +440,7 @@ def regret_panel(ax: Axes, view: EpisodeView) -> Callable[[int], Any]:
     the other: injected commonly exceeds realized when successive
     disagreements cancel, and realized can exceed injected when they compound.
     """
-    goal = view.goal_context
+    goal = view.goal_ind
     regret = view.goal_regret
     injected = view.cumulative_disentanglement[:, goal]
 
@@ -476,7 +481,7 @@ def regret_rate_panel(ax: Axes, view: EpisodeView) -> Callable[[int], Any]:
     which is why it tracks the magnitude of the change far better than its
     signed value.
     """
-    goal = view.goal_context
+    goal = view.goal_ind
     delta = np.diff(view.goal_regret, prepend=0.0)
     updates = view.disentanglement[:, goal]
 
@@ -604,7 +609,8 @@ class EpisodeAnimation:
 
     def save(self, path: str | Path) -> Path:
         """Write the animation to a GIF and return the path."""
-        path = Path(path).with_suffix(".gif")
+        path = Path(path)
+        path = path if path.suffix == ".gif" else path.with_name(path.name + ".gif")
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_bytes(self.to_gif())
         return path
@@ -729,14 +735,6 @@ def animate_episode(
         build on ``default_panels(n_contexts, extended=True)`` instead.
     fps:
         Playback rate, also the GIF frame rate.
-    symmetric:
-        Whether *both* divergences — factorization regret and update
-        dis-entanglement — average the two KL directions. Applies to both
-        together, so the panels never mix conventions.
-    baseline:
-        What the joint observer's update is compared against: ``"history"``
-        isolates history dependence, ``"naive"`` gives the direct joint-vs-naive
-        contrast. See :class:`EpisodeView`.
 
     Examples
     --------
@@ -795,7 +793,7 @@ def animate_episode(
 # --------------------------------------------------------------------------- #
 # the interaction phases, swept
 # --------------------------------------------------------------------------- #
-def _window_anchor(strengths: np.ndarray, cfg) -> float:
+def _window_anchor(phases: np.ndarray, cfg) -> float:
     """Which turn to express a swept window's position in.
 
     The pattern repeats every ``n_roll`` slots, so a window's position is only
@@ -803,7 +801,7 @@ def _window_anchor(strengths: np.ndarray, cfg) -> float:
     boundary makes the box jump from one edge of the panel to the other. Anchor
     it to the lowest position the sweep reaches and the box slides instead.
     """
-    raw = np.asarray(strengths) * cfg.n_roll - (cfg.n_realizations - 1)
+    raw = np.asarray(phases) * cfg.n_roll - (cfg.n_realizations - 1)
     low, width = float(raw.min()), float(raw.max() - raw.min())
     if width >= cfg.n_roll:
         return 0.0  # the sweep covers a whole turn; wrapping cannot be avoided
@@ -821,7 +819,7 @@ def _draw_embedding_circle(
     pair: tuple[int, int],
     colours: tuple[str, str],
     angles: tuple[float, float],
-    strengths: tuple[float, float],
+    phases: tuple[float, float],
     *,
     palette: Palette,
     emphasise_keys: bool,
@@ -829,12 +827,12 @@ def _draw_embedding_circle(
     """The two key/query pairs on a unit circle, with the keys free to turn.
 
     Each query is a fixed reference direction and each key swings against it, so
-    the angle you watch opening and closing *is* the interaction strength.
+    the cosine of the angle you watch opening and closing *is* the interaction phase.
     """
     i, j = pair
     colour_i, colour_j = colours
     theta_i, theta_j = angles
-    z_ij, z_ji = strengths
+    z_ij, z_ji = phases
     key_style = (3.0, 1.0) if emphasise_keys else (2.2, 1.0)
     query_style = (1.8, 0.45) if emphasise_keys else (2.2, 1.0)
 
@@ -901,12 +899,12 @@ def animate_interaction_phases(
 
     The top row is one real pair, fixed. Below it the same pair has its two
     **keys** swept while the queries hold still, so every panel to the right
-    moves in step: the phase markers slide along the one standard waveform, the
-    window translates across the standard pattern, and the rate table
+    moves in step: the phase markers slide along the one standard sinusoid, the
+    window translates across the standard pattern, and the likelihood table
     restructures.
 
     Nothing here is interpolated. Each frame's table is rebuilt from that frame's
-    two strengths through the same construction the environment uses, so every
+    two phases through the same construction the environment uses, so every
     table shown is one the world would genuinely produce for those angles.
 
     The keys swing rather than spin. Near a right angle the cosine is steepest,
@@ -956,14 +954,14 @@ def animate_interaction_phases(
     i, j = pair
     colours = (palette.context(i, goal), palette.context(j, goal))
 
-    waveform = _standard_waveform(cfg)
-    pattern = _phase_pattern(cfg, waveform)
+    sinusoid = _standard_sinusoid(cfg)
+    pattern = _phase_pattern(cfg, sinusoid)
     realizations = np.arange(cfg.n_realizations)
     swing_i, swing_j = np.deg2rad(swing)
     centre_i, centre_j = np.deg2rad(centre)
-    phase = 2 * np.pi * np.arange(n_frames) / n_frames
-    theta_i = np.pi / 2 + centre_i + swing_i * np.sin(phase)
-    theta_j = -np.pi / 2 + centre_j + swing_j * np.sin(2 * phase)
+    cycle = 2 * np.pi * np.arange(n_frames) / n_frames
+    theta_i = np.pi / 2 + centre_i + swing_i * np.sin(cycle)
+    theta_j = -np.pi / 2 + centre_j + swing_j * np.sin(2 * cycle)
     swept_ij = np.cos(theta_i - np.pi / 2)
     swept_ji = np.cos(theta_j + np.pi / 2)
     anchor = (_window_anchor(swept_ij, cfg), _window_anchor(swept_ji, cfg))
@@ -976,22 +974,22 @@ def animate_interaction_phases(
             ax.clear()
 
         z_ij, z_ji = float(swept_ij[frame]), float(swept_ji[frame])
-        table = gen.sigmoid(np.outer(
-            _wave_at(cfg, waveform, z_ij * cfg.n_roll - realizations),
-            _wave_at(cfg, waveform, z_ji * cfg.n_roll - realizations)))
+        table = likelihood.sigmoid(np.outer(
+            _sinusoid_at(cfg, sinusoid, z_ij * cfg.n_roll - realizations),
+            _sinusoid_at(cfg, sinusoid, z_ji * cfg.n_roll - realizations)))
         _draw_embedding_circle(
             axes[0], (i, j), colours,
             (float(theta_i[frame]), float(theta_j[frame])), (z_ij, z_ji),
             palette=palette, emphasise_keys=True)
         axes[0].set_title("impact of rotating embeddings", fontsize=10)
-        _draw_phase_columns(axes[1:], cfg, waveform, pattern, (i, j), colours,
+        _draw_phase_columns(axes[1:], cfg, sinusoid, pattern, (i, j), colours,
                             (z_ij, z_ji), table, palette=palette,
                             legend=False, window_anchor=anchor)
 
         fig.suptitle(
-            "one standard likelihood, translated by the interaction angles  —  "
+            "one standard likelihood, translated by the interaction phases  —  "
             f"vars {batch.ctx_inds[episode, i]} and {batch.ctx_inds[episode, j]}, "
-            "rates dark 0 to light 1",
+            "likelihood dark 0 to light 1",
             fontsize=12,
         )
         return []

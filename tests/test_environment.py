@@ -7,6 +7,7 @@ generative model is later changed on purpose.
 from __future__ import annotations
 
 import dataclasses
+import itertools
 
 import numpy as np
 import pytest
@@ -20,6 +21,7 @@ from coggrid import (
     run_observers,
     score_belief,
 )
+from coggrid.sampling import sample_contexts
 
 SMALL = CogGridConfig(
     n_vars=80, n_held_out_vars=8, n_contexts=2, n_realizations=6,
@@ -81,15 +83,15 @@ class TestConfig:
 class TestGenerativeModel:
     def test_shapes(self, batch):
         cfg = batch.cfg
-        assert batch.rates.shape == (200, cfg.n_observations, *cfg.realization_shape)
-        assert batch.marginal_rates.shape == (
+        assert batch.joint_likelihood.shape == (200, cfg.n_observations, *cfg.realization_shape)
+        assert batch.marginal_likelihood.shape == (
             200, cfg.n_observations, cfg.n_contexts, cfg.n_realizations
         )
         assert batch.observations.shape == (200, cfg.n_steps, cfg.n_observations)
         assert batch.observations.dtype == bool
 
-    def test_rates_are_probabilities(self, batch):
-        assert (batch.rates > 0).all() and (batch.rates < 1).all()
+    def test_likelihoods_are_probabilities(self, batch):
+        assert (batch.joint_likelihood > 0).all() and (batch.joint_likelihood < 1).all()
 
     def test_embeddings_orthonormal_across_channels(self, world):
         gram = np.einsum("sod,sed->soe", world.keys, world.keys)
@@ -97,19 +99,19 @@ class TestGenerativeModel:
         assert np.allclose(gram, eye, atol=1e-10)
 
     def test_marginal_is_a_marginal_of_the_joint(self, batch):
-        direct = batch.rates.mean(axis=3)  # average out context 1
-        assert np.allclose(batch.marginal_rates[:, :, 0, :], direct)
+        direct = batch.joint_likelihood.mean(axis=3)  # average out context 1
+        assert np.allclose(batch.marginal_likelihood[:, :, 0, :], direct)
 
-    def test_observation_rate_matches_realized_cell(self, batch):
+    def test_p_obs_matches_the_realized_cell(self, batch):
         for b in range(10):
-            cell = batch.rates[(b, slice(None), *batch.ctx_vals[b])]
-            assert np.allclose(cell, batch.true_rates[b])
+            cell = batch.joint_likelihood[(b, slice(None), *batch.ctx_vals[b])]
+            assert np.allclose(cell, batch.p_obs__vals[b])
 
-    def test_observation_frequency_matches_rate(self, world):
-        """Empirical Bernoulli frequency should track the true rate."""
+    def test_observation_frequency_matches_p_obs(self, world):
+        """Empirical Bernoulli frequency should track p_obs__vals."""
         batch = world.sample_episodes(400, rng=1)
         observed = batch.observations.mean(axis=1)
-        assert np.abs(observed.mean(0) - batch.true_rates.mean(0)).max() < 0.05
+        assert np.abs(observed.mean(0) - batch.p_obs__vals.mean(0)).max() < 0.05
 
 
 # ------------------------------------------------------------------ splits
@@ -130,10 +132,81 @@ class TestSplits:
         ).squeeze(1)
         assert (goal_var >= world.cfg.n_held_out_vars).all()
 
-    def test_distinct_vars_when_requested(self):
-        world = World(SMALL.replace(allow_repeated_vars=False))
+    def test_distinct_vars_by_default(self):
+        world = World(SMALL)
         batch = world.sample_episodes(200)
         assert all(len(set(row)) == len(row) for row in batch.ctx_inds)
+
+    @pytest.mark.parametrize("split", ["held_out", "train"])
+    @pytest.mark.parametrize(
+        "changes",
+        [
+            {"n_contexts": 3},
+            {"n_contexts": 8},  # as many as held-out variables
+        ],
+    )
+    def test_no_episode_repeats_a_variable(self, split, changes):
+        cfg = SMALL.replace(**changes)
+        batch = World(cfg).sample_episodes(2000, split=split, rng=5, expose_likelihood=False)
+        ctx = batch.ctx_inds
+        assert (ctx[:, 1:] > ctx[:, :-1]).all()  # sorted rows, so all distinct
+        if split == "train":
+            assert (ctx < cfg.n_held_out_vars).sum(axis=1).max() <= 1
+            goal_var = np.take_along_axis(ctx, batch.goal_ind[:, None], axis=1)
+            assert (goal_var >= cfg.n_held_out_vars).all()
+
+    @pytest.mark.parametrize("split", ["held_out", "train"])
+    def test_only_the_episodes_that_repeat_change(self, split):
+        """A seed gives the episodes repeats would, except those that repeat."""
+        cfg = SMALL.replace(n_contexts=3)
+        old_world, new_world = World(cfg.replace(allow_repeated_vars=True)), World(cfg)
+        for rng in (7, None):  # a fresh seed, then each world's own stream
+            old = old_world.sample_episodes(1000, split=split, rng=rng, expose_likelihood=False)
+            new = new_world.sample_episodes(1000, split=split, rng=rng, expose_likelihood=False)
+            rows = np.sort(old.ctx_inds, axis=1)
+            kept = ~(rows[:, 1:] == rows[:, :-1]).any(axis=1)
+            assert 0 < kept.sum() < kept.size
+            for name in ("ctx_inds", "goal_ind", "ctx_vals", "observations"):
+                assert np.array_equal(getattr(new, name)[kept], getattr(old, name)[kept])
+        assert new_world.rng.bit_generator.state == old_world.rng.bit_generator.state
+
+    @pytest.mark.parametrize("split", ["held_out", "train"])
+    def test_redrawn_episodes_follow_the_conditional_law(self, split):
+        """Contexts are exactly the repeating sampler given distinct variables."""
+        cfg = CogGridConfig(
+            n_vars=10, n_held_out_vars=5, n_contexts=3, n_realizations=3,
+            n_observations=2, embedding_dim=2, seed=0,
+        )
+        held, train = range(5), range(5, 10)
+        pool = held if split == "held_out" else range(10)
+        law: dict[tuple[int, ...], float] = {}
+        for draw in itertools.product(pool, repeat=3):
+            # Training episodes keep their first held-out variable and replace
+            # the rest with independent training draws.
+            novel = [i for i, x in enumerate(draw) if x in held][1:]
+            novel = novel if split == "train" else []
+            for refill in itertools.product(train, repeat=len(novel)):
+                ctx = list(draw)
+                for i, x in zip(novel, refill, strict=True):
+                    ctx[i] = x
+                if len(set(ctx)) == 3:
+                    key = tuple(sorted(ctx))
+                    law[key] = law.get(key, 0.0) + len(train) ** -len(novel)
+        n = 200_000
+        rng = np.random.default_rng(99)
+        ctx, _ = sample_contexts(cfg, rng, split=split, batch_size=n)
+        outcomes, counts = np.unique(ctx, axis=0, return_counts=True)
+        observed = dict(zip(map(tuple, outcomes.tolist()), counts, strict=True))
+        assert set(observed) <= set(law)
+        expected = np.array([law[key] for key in law]) * n / sum(law.values())
+        found = np.array([observed.get(key, 0) for key in law])
+        chi2 = ((found - expected) ** 2 / expected).sum()
+        assert chi2 < len(law) + 6 * (2 * len(law)) ** 0.5  # six sigma
+
+    def test_one_context_has_no_split(self):
+        """A lone variable is its episode's goal, so training covers every variable."""
+        batch = World(SMALL.replace(n_contexts=1)).sample_episodes(500, split="train")
+        assert (batch.ctx_inds < SMALL.n_held_out_vars).any()
 
     def test_rejects_unknown_split(self, world):
         with pytest.raises(ValueError, match="split"):
@@ -180,34 +253,34 @@ class TestObservers:
 
 
 class TestPhaseStructure:
-    """Interaction strength enters the likelihood only as a phase.
+    """The interaction phase ``z`` enters the likelihood only as a shift of one sinusoid.
 
-    The README and ``plot_interaction_phases`` both claim every rate table is
+    The README and ``plot_interaction_phases`` both claim every likelihood table is
     one standard pattern, translated. These pin that down.
     """
 
     @staticmethod
-    def _waveform(cfg, n_samples=4001):
-        """The standard potential waveform, read off as the phase sweeps a turn."""
-        from coggrid.generative import realization_potential, value_profile
+    def _sinusoid(cfg, n_samples=4001):
+        """The standard sinusoid, read off as the phase sweeps a turn."""
+        from coggrid.likelihood import get_sinusoids, soft_roll
 
         turn = np.linspace(0.0, 1.0, n_samples)[:-1]
-        return turn, realization_potential(turn, value_profile(cfg), cfg.n_roll)[:, 0]
+        return turn, soft_roll(turn, get_sinusoids(cfg))[:, 0]
 
-    def test_phase_is_linear_in_interaction_strength(self):
-        """Phase advances by ``-2*pi*likelihood_freq*z``, with fixed amplitude."""
-        from coggrid.generative import realization_potential, value_profile
+    def test_the_shift_is_linear_in_the_interaction_phase(self):
+        """The outer vector's Fourier phase advances by ``-2*pi*likelihood_freq*z``, with fixed amplitude."""
+        from coggrid.likelihood import get_sinusoids, soft_roll
 
         for freq in (1.0, 2.0):
             cfg = CogGridConfig(n_vars=60, n_realizations=10,
                                 likelihood_freq=freq, seed=0)
-            profile = value_profile(cfg)
+            sinusoids = get_sinusoids(cfg)
             r = np.arange(cfg.n_realizations)
             basis = np.exp(-2j * np.pi * freq * r / cfg.n_roll)
 
             zs = np.linspace(-0.45, 0.45, 31)
             comp = np.array([
-                basis @ realization_potential(np.array(z), profile, cfg.n_roll)
+                basis @ soft_roll(np.array(z), sinusoids)
                 for z in zs
             ])
             slope, intercept = np.polyfit(zs, np.unwrap(np.angle(comp)), 1)
@@ -217,26 +290,26 @@ class TestPhaseStructure:
             residual = np.abs(np.unwrap(np.angle(comp)) - (slope * zs + intercept))
             assert residual.max() < 0.1
 
-    def test_every_rate_table_is_the_same_pattern_translated(self):
-        """Rebuild each table from one waveform plus its two strengths."""
-        from coggrid.generative import sigmoid
+    def test_every_likelihood_table_is_the_same_pattern_translated(self):
+        """Rebuild each table from one sinusoid plus its two phases."""
+        from coggrid.likelihood import sigmoid
 
         cfg = CogGridConfig(n_vars=200, n_contexts=2, n_realizations=10, seed=4)
         batch = World(cfg).sample_episodes(6)
-        turn, waveform = self._waveform(cfg)
+        turn, sinusoid = self._sinusoid(cfg)
         r = np.arange(cfg.n_realizations)
 
-        def wave(position):
+        def sinusoid_at(position):
             return np.interp(np.mod(position, cfg.n_roll) / cfg.n_roll,
-                             turn, waveform, period=1.0)
+                             turn, sinusoid, period=1.0)
 
         worst = 0.0
         for e in range(batch.batch_size):
             for c in range(cfg.n_observations):
                 z_ij, z_ji = batch.interactions[e, c, 0], batch.interactions[e, c, 1]
-                rebuilt = sigmoid(np.outer(wave(z_ij * cfg.n_roll - r),
-                                           wave(z_ji * cfg.n_roll - r)))
-                worst = max(worst, np.abs(rebuilt - batch.rates[e, c]).max())
+                rebuilt = sigmoid(np.outer(sinusoid_at(z_ij * cfg.n_roll - r),
+                                           sinusoid_at(z_ji * cfg.n_roll - r)))
+                worst = max(worst, np.abs(rebuilt - batch.joint_likelihood[e, c]).max())
         assert worst < 1e-5
 
 
@@ -266,7 +339,7 @@ class TestDisentanglement:
         assert values.max() > 0
 
     def test_naive_update_equals_the_evidence_likelihood(self):
-        """Independent derivation: no beliefs, straight from the rate table.
+        """Independent derivation: no beliefs, straight from the likelihood table.
 
         The naive observer's per-step update *is* the marginal likelihood of that
         step's evidence. Computing it both ways pins the whole update
@@ -274,7 +347,7 @@ class TestDisentanglement:
         observer becomes confident.
         """
         from coggrid.observers import (
-            RATE_FLOOR,
+            LIKELIHOOD_FLOOR,
             _log_marginal_belief,
             _normalized_update,
         )
@@ -284,10 +357,10 @@ class TestDisentanglement:
             via_belief = _normalized_update(
                 _log_marginal_belief(traces["naive"], n_contexts)
             )
-            rates = np.clip(batch.marginal_rates, RATE_FLOOR, 1 - RATE_FLOOR)
+            p = np.clip(batch.marginal_likelihood, LIKELIHOOD_FLOOR, 1 - LIKELIHOOD_FLOOR)
             obs = batch.observations.astype(float)
-            log_lik = np.einsum("bto,bocr->btcr", obs, np.log(rates)) + np.einsum(
-                "bto,bocr->btcr", 1 - obs, np.log1p(-rates)
+            log_lik = np.einsum("bto,bocr->btcr", obs, np.log(p)) + np.einsum(
+                "bto,bocr->btcr", 1 - obs, np.log1p(-p)
             )
             direct = np.exp(log_lik - log_lik.max(-1, keepdims=True))
             direct /= direct.sum(-1, keepdims=True)
@@ -338,7 +411,7 @@ class TestReproducibility:
         restored = EpisodeBatch.load(batch.save(tmp_path / "batch"))
         assert restored.cfg == batch.cfg
         assert np.array_equal(restored.observations, batch.observations)
-        assert np.allclose(restored.rates, batch.rates)
+        assert np.allclose(restored.joint_likelihood, batch.joint_likelihood)
 
     def test_select_preserves_content(self, batch):
         one = batch.select(3)
@@ -361,6 +434,18 @@ class TestGymEnv:
             assert not truncated
         assert steps == SMALL.n_steps
 
+    @pytest.mark.filterwarnings("error")
+    @pytest.mark.parametrize("expose_likelihood", [False, True])
+    def test_passes_gymnasiums_env_checker(self, expose_likelihood):
+        from gymnasium.utils.env_checker import check_env
+
+        check_env(CogGridEnv(SMALL, expose_likelihood=expose_likelihood, seed=0), skip_render_check=True)
+
+    def test_np_random_does_not_replay_the_episode_stream(self):
+        env = CogGridEnv(SMALL)
+        env.reset(seed=5)
+        assert env.np_random.random() != np.random.default_rng(5).random()
+
     def test_step_before_reset_raises(self):
         with pytest.raises(RuntimeError, match="reset"):
             CogGridEnv(SMALL).step(0)
@@ -371,24 +456,24 @@ class TestGymEnv:
         with pytest.raises(ValueError, match="Discrete"):
             env.step(SMALL.n_realizations)
 
-    def test_perfect_agent_scores_one(self):
-        env = CogGridEnv(SMALL, seed=0)
+    def test_perfect_agent_scores_every_dense_step(self):
+        env = CogGridEnv(SMALL, reward_mode="dense", seed=0)
         _, info = env.reset()
-        total = sum(env.step(info["goal_value"])[1] for _ in range(SMALL.n_steps))
+        total = sum(env.step(info["goal_val"])[1] for _ in range(SMALL.n_steps))
         assert total == pytest.approx(SMALL.n_steps)
 
-    def test_terminal_reward_mode(self):
-        env = CogGridEnv(SMALL, reward_mode="terminal", seed=0)
+    def test_reward_is_terminal_by_default(self):
+        env = CogGridEnv(SMALL, seed=0)
         _, info = env.reset()
-        rewards = [env.step(info["goal_value"])[1] for _ in range(SMALL.n_steps)]
+        rewards = [env.step(info["goal_val"])[1] for _ in range(SMALL.n_steps)]
         assert rewards[:-1] == [0.0] * (SMALL.n_steps - 1)
         assert rewards[-1] == 1.0
 
     def test_seeded_reset_is_reproducible(self):
         a = CogGridEnv(SMALL).reset(seed=5)[0]
-        b = CogGridEnv(SMALL).reset(seed=5)[0]
+        b = CogGridEnv(SMALL).reset(seed=np.int64(5))[0]  # a numpy integer seeds the same way
         assert np.array_equal(a["observation"], b["observation"])
-        assert np.array_equal(a["active_vars"], b["active_vars"])
+        assert np.array_equal(a["ctx_inds"], b["ctx_inds"])
 
     def test_env_episode_is_scoreable(self):
         """The episode an agent saw can be handed straight to an observer."""
