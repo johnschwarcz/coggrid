@@ -210,10 +210,12 @@ factorization_regret(traces["joint"], traces["naive"])   # (batch_size, n_steps)
 disentanglement(traces["joint"], traces["naive"], batch) # (batch_size, n_steps)
 ```
 
-**Factorization regret** — `D_KL(B_joint ‖ B_naive)` 
-([§3.1](https://arxiv.org/abs/2603.27134)) — measures the cost of factorizing inference of interacting latent variables.
+**Factorization regret** — `D_KL(B_joint ‖ B_naive)` — measures the cost of factorizing inference of interacting latent variables.
+It is exact by default: computed from the observers' log beliefs, so it stays correct where a posterior underflows to 0, and never capped.
+`clip=1e-15` clips both beliefs into `[1e-15, 1 - 1e-15]` first, which caps each term at 34.5 nats:
+that reproduces the paper's regret curves, which saturate there, and coggrid ≤ 0.3.0.
 
-**Dis-entanglement** ([§B.3](https://arxiv.org/abs/2603.27134)) quantifies the 'history-dependence' of an observation, 
+**Dis-entanglement** quantifies the 'history-dependence' of an observation, 
 by measuring the divergence between the naive marginal likelihood `p(o_t | r)` 
 and the optimal, history-conditioned one `p(o_t | r, o_1:t-1)`. 
 It is zero when marginal belief dynamics are Markovian.

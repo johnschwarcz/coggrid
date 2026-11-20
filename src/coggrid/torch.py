@@ -22,7 +22,7 @@ from typing import Any
 import numpy as np
 
 from . import likelihood
-from .observers import LIKELIHOOD_FLOOR
+from .observers import LIKELIHOOD_FLOOR, _log_goal
 from .world import EpisodeBatch
 
 __all__ = ["joint_belief"]
@@ -49,18 +49,24 @@ def joint_belief(batch: EpisodeBatch, *, device: Any, dtype: Any = None) -> tupl
     return belief, belief[episodes, :, torch.as_tensor(batch.goal_ind, device=device)]
 
 
-def _joint_arrays(batch: EpisodeBatch, device: Any, keep_log_posterior: bool) -> tuple[np.ndarray, np.ndarray | None]:
-    """``(belief, log_posterior)`` in numpy float64, for ``joint_observer(device=)``."""
+def _joint_arrays(batch: EpisodeBatch, device: Any, keep_log_posterior: bool) -> tuple[np.ndarray, np.ndarray | None, np.ndarray]:
+    """``(belief, log_posterior, log_goal_belief)`` in numpy float64, for ``joint_observer(device=)``."""
     torch = _torch()
     cfg = batch.cfg
     shape = (batch.batch_size, batch.n_steps, *cfg.realization_shape)
     belief = np.empty((*shape[:2], cfg.n_contexts, cfg.n_realizations))
+    log_goal_belief = np.empty((*shape[:2], cfg.n_realizations))
     log_posterior = np.empty(shape) if keep_log_posterior else None
     for eps, log_post in _log_posteriors(batch, torch.device(device), torch.float64):
         belief[eps] = _marginals(log_post, cfg.realization_shape).cpu().numpy()
+        goal_ind = batch.goal_ind[eps]
+        log_goal_belief[eps], deep = _log_goal(belief[eps], goal_ind)
+        if deep.size:  # near underflow: summed out in log space, as the numpy observer does
+            rows = torch.as_tensor(deep, device=log_post.device)
+            log_goal_belief[eps.start + deep] = _log_goal_marginal(log_post[rows], goal_ind[deep], cfg.realization_shape).cpu().numpy()
         if log_posterior is not None:
             log_posterior[eps] = log_post.reshape(-1, *shape[1:]).cpu().numpy()
-    return belief, log_posterior
+    return belief, log_posterior, log_goal_belief
 
 
 def _torch() -> Any:
@@ -125,3 +131,20 @@ def _marginals(log_post: Any, grid: tuple[int, ...]) -> Any:
         rest = level.sum(dim=2)
     belief = torch.stack([*sums, rest], dim=2)
     return belief / belief[:, :, :1].sum(dim=-1, keepdim=True)
+
+
+def _log_goal_marginal(log_post: Any, goal_ind: np.ndarray, grid: tuple[int, ...]) -> Any:
+    """``(n, T, n_hyp)`` log posterior to ``(n, T, n_realizations)``, each episode's normalized log marginal over its goal variable.
+    As in :func:`coggrid.observers._log_goal_marginal`, it overwrites ``log_post``, which :func:`_joint_arrays` passes as a copy."""
+    torch = _torch()
+    log_post = log_post.reshape(*log_post.shape[:2], *grid)
+    out = log_post.new_empty(log_post.shape[:3])
+    for c in np.unique(goal_ind):
+        rows = torch.as_tensor(np.flatnonzero(goal_ind == c), device=log_post.device)
+        other = tuple(2 + k for k in range(len(grid)) if k != c)
+        marginal = log_post if len(rows) == len(log_post) else log_post[rows]
+        if other:
+            peak = marginal.amax(dim=other, keepdim=True)
+            marginal = marginal.sub_(peak).clamp_min_(-700.0).exp_().sum(dim=other).log_() + peak.squeeze(other)
+        out[rows] = marginal.log_softmax(dim=-1)
+    return out

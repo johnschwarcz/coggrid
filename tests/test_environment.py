@@ -13,6 +13,7 @@ import numpy as np
 import pytest
 
 from coggrid import (
+    BeliefTrace,
     CogGridConfig,
     CogGridEnv,
     World,
@@ -250,6 +251,16 @@ class TestObservers:
         for trace in traces.values():
             assert np.isfinite(trace.belief).all()
             assert np.allclose(trace.belief.sum(-1), 1.0)
+            assert np.isfinite(trace.log_goal_belief).all()
+            assert np.allclose(
+                np.exp(trace.log_goal_belief), trace.goal_belief, rtol=0, atol=1e-10
+            )
+        for symmetric in (False, True):
+            regret = factorization_regret(
+                traces["joint"], traces["naive"], symmetric=symmetric
+            )
+            assert np.isfinite(regret).all()
+            assert (regret >= -1e-12).all()
 
 
 class TestPhaseStructure:
@@ -315,7 +326,7 @@ class TestPhaseStructure:
 
 # ------------------------------------------------------------ dis-entanglement
 class TestDisentanglement:
-    """The §B.3 metric, independently of anything that draws it."""
+    """Dis-entanglement, independently of anything that draws it."""
 
     @staticmethod
     def _episodes(n_contexts):
@@ -390,6 +401,170 @@ class TestDisentanglement:
         goal = disentanglement(traces["joint"], traces["naive"], batch)
         expected = per_var[np.arange(batch.batch_size), :, batch.goal_ind]
         assert np.array_equal(goal, expected)
+
+
+# ------------------------------------------------------- factorization regret
+def _logsumexp(x, axis):
+    peak = x.max(axis=axis, keepdims=True)
+    return peak + np.log(np.exp(x - peak).sum(axis=axis, keepdims=True))
+
+
+class TestFactorizationRegret:
+    """Factorization regret, exact however confident the observers become."""
+
+    @staticmethod
+    def _log_goal_beliefs(batch):
+        """Both observers' log beliefs over the goal, straight from the likelihood table.
+
+        Episode by episode, in log space throughout, sharing no code with the
+        observers: the naive table is the joint one averaged over the other variables.
+        """
+        from coggrid.observers import LIKELIHOOD_FLOOR
+
+        ones = batch.observations.cumsum(axis=1, dtype=float)
+        zeros = np.arange(1, batch.n_steps + 1)[:, None] - ones
+        joint, naive = [], []
+        for b in range(batch.batch_size):
+            # (n_observations, goal value, every combination of the other values)
+            table = np.moveaxis(batch.joint_likelihood[b], 1 + batch.goal_ind[b], 1)
+            table = table.reshape(*table.shape[:2], -1)
+            for out, p in ((joint, table), (naive, table.mean(-1, keepdims=True))):
+                p = np.clip(p, LIKELIHOOD_FLOOR, 1 - LIKELIHOOD_FLOOR)
+                log_lik = np.einsum("to,ork->trk", ones[b], np.log(p)) + np.einsum(
+                    "to,ork->trk", zeros[b], np.log1p(-p)
+                )
+                marginal = _logsumexp(log_lik, -1)[..., 0]
+                out.append(marginal - _logsumexp(marginal, -1))
+        return np.stack(joint), np.stack(naive)
+
+    @pytest.mark.parametrize("n_steps", [15, 300, 1000, 4000])
+    @pytest.mark.parametrize("n_contexts", [1, 2, 3])
+    def test_matches_an_independent_computation(self, n_contexts, n_steps):
+        """At every horizon, including those where the shortcuts give out.
+
+        From 1000 steps clipping caps the regret, and by 4000 the beliefs
+        underflow to 0. At 300, some episodes' beliefs come near underflow and
+        others' do not, which the joint observer computes two ways.
+        """
+        cfg = SMALL.replace(n_contexts=n_contexts, n_steps=n_steps)
+        batch = World(cfg).sample_episodes(4, rng=3)
+        traces = run_observers(batch)
+        joint, naive = traces["joint"], traces["naive"]
+        log_p, log_q = self._log_goal_beliefs(batch)
+        np.testing.assert_allclose(joint.log_goal_belief, log_p, rtol=1e-12, atol=1e-9)
+        np.testing.assert_allclose(naive.log_goal_belief, log_q, rtol=1e-12, atol=1e-9)
+
+        forward = (np.exp(log_p) * (log_p - log_q)).sum(-1)
+        reverse = (np.exp(log_q) * (log_q - log_p)).sum(-1)
+        regret = factorization_regret(joint, naive)
+        np.testing.assert_allclose(regret, forward, rtol=1e-9, atol=1e-9)
+        np.testing.assert_allclose(
+            factorization_regret(joint, naive, symmetric=True), (forward + reverse) / 2,
+            rtol=1e-9, atol=1e-9,
+        )
+        lean = run_observers(batch, keep_log_posterior=False)["joint"]
+        assert np.array_equal(lean.log_goal_belief, joint.log_goal_belief)
+
+        if n_contexts > 1 and n_steps >= 1000:
+            clipped = factorization_regret(joint, naive, clip=1e-15)
+            assert clipped.max() < 34.6 < regret.max()
+        if n_contexts > 1 and n_steps == 4000:
+            assert (naive.goal_belief == 0).any()
+            bare = [dataclasses.replace(t, log_goal_belief=None) for t in (joint, naive)]
+            assert factorization_regret(*bare).max() < 709 < regret.max()
+
+    @pytest.mark.parametrize("symmetric", [False, True])
+    def test_clip_is_the_old_formula(self, batch, symmetric):
+        """``clip=1e-15`` is coggrid 0.3.0's arithmetic, bit for bit: the paper's regret curves."""
+        traces = run_observers(batch)
+        p = np.clip(traces["joint"].goal_belief, 1e-15, 1.0 - 1e-15)
+        q = np.clip(traces["naive"].goal_belief, 1e-15, 1.0 - 1e-15)
+        forward = (p * np.log(p / q)).sum(-1)
+        expected = (forward + (q * np.log(q / p)).sum(-1)) / 2.0 if symmetric else forward
+        got = factorization_regret(
+            traces["joint"], traces["naive"], symmetric=symmetric, clip=1e-15
+        )
+        assert np.array_equal(got, expected)
+
+    def test_eps_is_a_deprecated_alias_of_clip(self, batch):
+        joint, naive = run_observers(batch).values()
+        with pytest.deprecated_call():
+            old = factorization_regret(joint, naive, eps=1e-6)
+        assert np.array_equal(old, factorization_regret(joint, naive, clip=1e-6))
+        with pytest.raises(TypeError, match="not both"):
+            factorization_regret(joint, naive, clip=1e-6, eps=1e-6)
+        # 0.3.0 took eps=0, so the error names the argument the caller passed.
+        with pytest.deprecated_call(), pytest.raises(ValueError, match="eps must be in"):
+            factorization_regret(joint, naive, eps=0.0)
+
+    @pytest.mark.parametrize("clip", [0.0, -1e-15, 0.5, 1.0, float("nan")])
+    def test_rejects_a_bad_clip(self, batch, clip):
+        joint, naive = run_observers(batch).values()
+        with pytest.raises(ValueError, match="clip must be in"):
+            factorization_regret(joint, naive, clip=clip)
+
+    @pytest.mark.filterwarnings("error")
+    def test_traces_built_by_hand(self, batch):
+        """Without log beliefs it reads the probabilities.
+
+        Either way an impossible value adds 0 to the divergence, not ``0 * inf = NaN``.
+        """
+        joint, naive = run_observers(batch).values()
+        bare = [dataclasses.replace(t, log_goal_belief=None) for t in (joint, naive)]
+        np.testing.assert_allclose(
+            factorization_regret(*bare), factorization_regret(joint, naive),
+            rtol=1e-12, atol=1e-12,
+        )
+
+        p, q = np.array([[[0.5, 0.5, 0.0]]]), np.array([[[0.25, 0.75, 0.0]]])
+        forward = 0.5 * np.log(0.5 / 0.25) + 0.5 * np.log(0.5 / 0.75)
+        reverse = 0.25 * np.log(0.25 / 0.5) + 0.75 * np.log(0.75 / 0.5)
+        with np.errstate(divide="ignore"):
+            log_p, log_q = np.log(p), np.log(q)
+        for log_beliefs in ((log_p, log_q), (None, None)):
+            pair = [
+                dataclasses.replace(t, goal_belief=b, log_goal_belief=log_b)
+                for t, b, log_b in zip((joint, naive), (p, q), log_beliefs, strict=True)
+            ]
+            np.testing.assert_allclose(factorization_regret(*pair), [[forward]])
+            np.testing.assert_allclose(
+                factorization_regret(*pair, symmetric=True), [[(forward + reverse) / 2]]
+            )
+
+    def test_log_beliefs_that_no_longer_match(self, batch):
+        """Swap another belief into a trace, an agent's, say, and it keeps its old log belief.
+
+        That one no longer matches ``goal_belief``, so the probabilities are read instead.
+        """
+        joint, naive = run_observers(batch).values()
+        agent = np.full_like(naive.belief, 1.0 / batch.cfg.n_realizations)
+        swapped = dataclasses.replace(naive, belief=agent, **score_belief(agent, batch))
+        bare = dataclasses.replace(swapped, log_goal_belief=None)
+        regret = factorization_regret(joint, swapped)
+        assert np.array_equal(regret, factorization_regret(joint, bare))
+        assert not np.allclose(regret, factorization_regret(joint, naive))
+
+        # Nor does a log belief off by a constant, which is not normalized.
+        unnormalized = dataclasses.replace(joint, log_goal_belief=joint.log_goal_belief + 3.0)
+        np.testing.assert_allclose(
+            factorization_regret(unnormalized, naive), factorization_regret(joint, naive),
+            rtol=1e-12, atol=1e-12,
+        )
+
+    def test_traces_pickled_by_0_3_0(self, batch):
+        """They unpickle without ``log_goal_belief``, which 0.3.0 did not have.
+
+        So the probabilities are read, as for a trace built by hand.
+        """
+        joint, naive = run_observers(batch).values()
+        old = []
+        for trace in (joint, naive):
+            unpickled = object.__new__(BeliefTrace)
+            for field in dataclasses.fields(BeliefTrace)[:-1]:  # what unpickling sets
+                object.__setattr__(unpickled, field.name, getattr(trace, field.name))
+            old.append(unpickled)
+        bare = [dataclasses.replace(t, log_goal_belief=None) for t in (joint, naive)]
+        assert np.array_equal(factorization_regret(*old), factorization_regret(*bare))
 
 
 # ----------------------------------------------------------- reproducibility

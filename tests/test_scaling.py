@@ -96,6 +96,7 @@ def test_observers_rebuild_the_tables(n_contexts, monkeypatch):
     for name, trace in run_observers(lite).items():
         assert np.array_equal(trace.belief, traces[name].belief), name
         assert np.array_equal(trace.log_posterior, traces[name].log_posterior), name
+        assert np.array_equal(trace.log_goal_belief, traces[name].log_goal_belief), name
 
 
 def test_dropping_the_log_posterior():
@@ -103,6 +104,7 @@ def test_dropping_the_log_posterior():
     kept, lean = run_observers(full), run_observers(full, keep_log_posterior=False)
     assert lean["joint"].log_posterior is None
     assert np.array_equal(kept["joint"].belief, lean["joint"].belief)
+    assert np.array_equal(kept["joint"].log_goal_belief, lean["joint"].log_goal_belief)
     with pytest.raises(ValueError, match="keep_log_posterior"):
         disentanglement(lean["joint"], lean["naive"], full)
 
