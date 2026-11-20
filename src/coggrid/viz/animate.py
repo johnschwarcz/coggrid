@@ -204,9 +204,9 @@ class EpisodeView:
     def goal_regret(self) -> np.ndarray:
         """``(n_steps,)`` factorization regret on the goal variable.
 
-        ``D_KL(B_joint || B_naive)`` over the goal variable (arXiv:2603.27134
-        §3.1). An accumulating measure, so it compares whole trajectories rather
-        than resolving individual steps — which is what :attr:`disentanglement`
+        ``D_KL(B_joint || B_naive)`` over the goal variable (arXiv:2603.27134).
+        An accumulating measure, so it compares whole trajectories rather than
+        resolving individual steps — which is what :attr:`disentanglement`
         is for.
         """
         return factorization_regret(
@@ -218,7 +218,7 @@ class EpisodeView:
         """``(n_steps, n_contexts)`` how non-Markovian each step's update is.
 
         This episode's slice of :func:`~coggrid.observers.disentanglement`
-        (arXiv:2603.27134 §B.3).
+        (arXiv:2603.27134).
         """
         return disentanglement(
             self.traces["joint"], self.traces["naive"], self.batch, per_variable=True

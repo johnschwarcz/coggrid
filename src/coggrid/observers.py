@@ -224,12 +224,12 @@ def score_belief(belief: np.ndarray, batch: EpisodeBatch) -> dict[str, np.ndarra
 def factorization_regret(joint: BeliefTrace, naive: BeliefTrace, *, symmetric: bool = False, clip: float | None = None, eps: float | None = None) -> np.ndarray:
     """``(batch_size, n_steps)`` divergence of the naive posterior over the goal from the joint one: large where modelling the interaction mattered.
 
-    The default is the paper's definition (arXiv:2603.27134 §3.1), the forward ``D_KL(B_joint || B_naive)``; ``symmetric=True`` averages both directions.
+    The default is the paper's definition (arXiv:2603.27134), the forward ``D_KL(B_joint || B_naive)``; ``symmetric=True`` averages both directions.
     It is exact by default, computed from each trace's ``log_goal_belief``: finite and correct where the beliefs themselves underflow to 0, and uncapped, so values above 34.5 nats are real.
     A trace without one, or whose ``goal_belief`` it no longer matches (checked at the last step, where a belief swapped in shows), is read from ``goal_belief`` instead,
     with exact zeros floored at the smallest positive float64.
     ``clip`` clips both beliefs into ``[clip, 1 - clip]`` first, which caps each term at ``-ln(clip)``:
-    ``clip=1e-15`` (34.5 nats) reproduces the paper's Fig. 2b, whose curves saturate there, and coggrid <= 0.3.0. ``eps`` is a deprecated alias of ``clip``.
+    ``clip=1e-15`` (34.5 nats) reproduces the paper's regret curves, which saturate there, and coggrid <= 0.3.0. ``eps`` is a deprecated alias of ``clip``.
     """
     name = "clip"
     if eps is not None:
@@ -307,7 +307,7 @@ def _normalized_update(log_belief: np.ndarray) -> np.ndarray:
 def disentanglement(joint: BeliefTrace, naive: BeliefTrace, batch: EpisodeBatch, *, per_variable: bool = False) -> np.ndarray:
     """How much of each step's belief update was carried by the history:
     ``(batch_size, n_steps)`` for the goal, or ``(batch_size, n_steps, n_contexts)`` with ``per_variable=True``.
-    The Jeffreys divergence (the sum of both KL directions; arXiv:2603.27134 §B.3)
+    The Jeffreys divergence (the sum of both KL directions; arXiv:2603.27134)
     between the naive marginal likelihood ``p(o_t | r)`` and the history-conditioned one ``p(o_t | r, o_1:t-1)``, recovered from consecutive optimal marginal beliefs.
     They coincide exactly when the marginal belief dynamics are Markovian, so any divergence is entanglement between the goal and the other active variables.
     A per-step flow, unlike the accumulating :func:`factorization_regret`.

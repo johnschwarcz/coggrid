@@ -326,7 +326,7 @@ class TestPhaseStructure:
 
 # ------------------------------------------------------------ dis-entanglement
 class TestDisentanglement:
-    """The §B.3 metric, independently of anything that draws it."""
+    """Dis-entanglement, independently of anything that draws it."""
 
     @staticmethod
     def _episodes(n_contexts):
@@ -410,7 +410,7 @@ def _logsumexp(x, axis):
 
 
 class TestFactorizationRegret:
-    """The §3.1 metric, exact however confident the observers become."""
+    """Factorization regret, exact however confident the observers become."""
 
     @staticmethod
     def _log_goal_beliefs(batch):
@@ -475,7 +475,7 @@ class TestFactorizationRegret:
 
     @pytest.mark.parametrize("symmetric", [False, True])
     def test_clip_is_the_old_formula(self, batch, symmetric):
-        """``clip=1e-15`` is coggrid 0.3.0's arithmetic, bit for bit: the paper's Fig. 2b."""
+        """``clip=1e-15`` is coggrid 0.3.0's arithmetic, bit for bit: the paper's regret curves."""
         traces = run_observers(batch)
         p = np.clip(traces["joint"].goal_belief, 1e-15, 1.0 - 1e-15)
         q = np.clip(traces["naive"].goal_belief, 1e-15, 1.0 - 1e-15)

@@ -446,7 +446,7 @@ class TestContextCounts:
         assert EpisodeView(batch=b, traces=t).disentanglement.max() > 0
 
     def test_disentanglement_vanishes_when_dynamics_are_markovian(self):
-        """Paper §B.3: the optimal update equals the naive update exactly when
+        """The paper's definition: the optimal update equals the naive update exactly when
         the belief dynamics are Markovian with respect to the marginals. With a
         single variable there is no context to entangle with, so it must be 0.
         """
@@ -458,7 +458,7 @@ class TestContextCounts:
         assert np.allclose(view.disentanglement, 0.0, atol=1e-9)
 
     def test_disentanglement_slices_the_library_metric(self):
-        """The view must expose exactly its own episode of the §B.3 metric.
+        """The view must expose exactly its own episode of the dis-entanglement metric.
 
         The maths itself is tested in ``test_environment.py``; what matters here
         is that the animation reads the right episode out of it.
