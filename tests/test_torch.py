@@ -35,10 +35,37 @@ def test_device_traces_match_numpy(batch, device, keep):
     )
     np.testing.assert_allclose(got.belief, expected.belief, rtol=0, atol=1e-12)
     assert np.array_equal(got.accuracy, expected.accuracy)
+    # A log belief near 0 carries the rounding of the larger log posterior it
+    # comes from, hence the atol.
+    np.testing.assert_allclose(
+        got.log_goal_belief, expected.log_goal_belief, rtol=1e-12, atol=1e-12
+    )
     if keep:
         np.testing.assert_allclose(got.log_posterior, expected.log_posterior, rtol=1e-12)
     else:
         assert got.log_posterior is None
+
+
+@pytest.mark.parametrize("device", DEVICES)
+def test_log_goal_belief_where_beliefs_underflow(device, monkeypatch):
+    """At long horizons the goal belief underflows to 0, and its log must not.
+
+    Three of these episodes come near underflow and one does not, which the
+    observers compute two ways: here with all four in one chunk, then one per chunk.
+    """
+    world = World(SMALL.replace(n_steps=1000))
+    long = world.sample_episodes(4, rng=2, expose_likelihood=False)
+    expected = joint_observer(long, keep_log_posterior=False)
+    deep = expected.goal_belief.min(axis=(1, 2)) < 1e-250
+    assert deep.any() and not deep.all()
+    assert (expected.goal_belief == 0).any()
+    chunked = joint_observer(long, keep_log_posterior=False, device=device)
+    monkeypatch.setattr("coggrid.torch._DEVICE_CHUNK_CELLS", 1)  # an episode at a time
+    for got in (chunked, joint_observer(long, keep_log_posterior=False, device=device)):
+        assert np.isfinite(got.log_goal_belief).all()
+        np.testing.assert_allclose(
+            got.log_goal_belief, expected.log_goal_belief, rtol=1e-12, atol=1e-10
+        )
 
 
 @pytest.mark.parametrize("device", DEVICES)
